@@ -14,7 +14,7 @@ const { authMiddleware, requireOrganizer } = require('../auth');
 const { decrypt } = require('../crypto');
 const { getClient } = require('../xrplClient');
 const { mintTicket, buyTicket, resellTicket } = require('../../src/ticket');
-const { getRLUSDBalance } = require('../../src/wallet');
+const { getRLUSDBalance, establishTrustLine } = require('../../src/wallet');
 const { sleep } = require('../../src/utils');
 
 /**
@@ -41,12 +41,12 @@ router.get('/my', authMiddleware, async (req, res) => {
 /**
  * POST /api/tickets/mint
  * Mint NFT tickets for an event (organizer only).
- * Body: { eventId, seats: [{ seat, originalPrice, maxResalePrice, maxResales }], royaltyPercent }
- * royaltyPercent: 0–50 (percentage, e.g. 10 = 10%). Defaults to 10.
+ * Body: { eventId, seats: [{ seat, originalPrice, maxResalePrice, maxResales }] }
+ * Royalty is read from the event's royalty_percent field (set at event creation).
  */
 router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
   try {
-    const { eventId, seats, royaltyPercent } = req.body;
+    const { eventId, seats } = req.body;
     if (!eventId || !seats || !seats.length) {
       return res.status(400).json({ success: false, error: 'eventId and seats array are required' });
     }
@@ -65,10 +65,20 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
     const client = await getClient();
     const organizerWallet = xrpl.Wallet.fromSeed(decrypt(walletRow.encrypted_seed));
 
-    // Convert royaltyPercent (0–50) to XRPL TransferFee units (0–50000)
+    // Read royalty from the event record (set at event creation time)
     // XRPL scale: 50000=50%, 10000=10%, 1000=1%, 1=0.001%
-    const pct = Math.min(50, Math.max(0, parseFloat(royaltyPercent) || 10));
-    const royaltyBps = Math.round(pct * 1000);
+    const royaltyPct = event.royalty_percent ?? 10;
+    const royaltyBps = Math.round(Math.min(50, Math.max(0, royaltyPct)) * 1000);
+
+    // Ensure organizer has a RLUSD TrustLine so royalties can be received.
+    // This is done once and recorded in the DB to avoid repeated on-chain TrustSet calls.
+    if (!walletRow.trust_line_established) {
+      const issuerRow = db.prepare("SELECT value FROM platform_config WHERE key = 'issuer_address'").get();
+      if (issuerRow) {
+        await establishTrustLine(client, organizerWallet, issuerRow.value);
+        db.prepare('UPDATE wallets SET trust_line_established = 1 WHERE user_id = ?').run(req.user.id);
+      }
+    }
 
     const mintedTickets = [];
 
@@ -113,7 +123,9 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
 
 /**
  * POST /api/tickets/buy
- * Buy a ticket. Body: { ticketId }
+ * Buy a ticket from the marketplace.
+ * Handles both primary sales (organizer → fan) and secondary/resale (fan → fan).
+ * Body: { ticketId }
  */
 router.post('/buy', authMiddleware, async (req, res) => {
   try {
@@ -123,7 +135,13 @@ router.post('/buy', authMiddleware, async (req, res) => {
     }
 
     const db = getDb();
-    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+    // Join with owner's role so we can detect primary vs resale
+    const ticket = db.prepare(`
+      SELECT t.*, u.role as owner_role
+      FROM tickets t
+      JOIN users u ON t.current_owner_id = u.id
+      WHERE t.id = ?
+    `).get(ticketId);
     if (!ticket) {
       return res.status(404).json({ success: false, error: 'Ticket not found' });
     }
@@ -147,15 +165,58 @@ router.post('/buy', authMiddleware, async (req, res) => {
     const buyerWallet = xrpl.Wallet.fromSeed(decrypt(buyerWalletRow.encrypted_seed));
     const sellerWallet = xrpl.Wallet.fromSeed(decrypt(sellerWalletRow.encrypted_seed));
 
+    const meta = JSON.parse(ticket.metadata_json || '{}');
+    const isResale = ticket.owner_role !== 'organizer';
+
+    if (isResale) {
+      // ── Secondary / resale purchase ──
+      // Block if no resales remain
+      if (ticket.max_resales > 0 && ticket.resale_count <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: `This ticket has no resales remaining (0 / ${ticket.max_resales})`,
+        });
+      }
+
+      const resalePrice = meta.listingPrice || ticket.original_price;
+
+      // Build metadata for anti-scalping checks inside resellTicket
+      const ticketMeta = { ...meta, resalesRemaining: ticket.resale_count };
+
+      const result = await resellTicket(
+        client, sellerWallet, buyerWallet,
+        ticket.token_id, resalePrice, issuerRow.value, ticketMeta
+      );
+
+      const newResaleCount = ticket.max_resales > 0 ? ticket.resale_count - 1 : 0;
+
+      // Clear listing flag, update owner, decrement resale count
+      meta.listedForSale = false;
+      delete meta.listingPrice;
+      db.prepare(
+        'UPDATE tickets SET current_owner_id = ?, resale_count = ?, metadata_json = ? WHERE id = ?'
+      ).run(req.user.id, newResaleCount, JSON.stringify(meta), ticketId);
+
+      db.prepare(
+        'INSERT INTO transactions (id, type, ticket_id, from_user_id, to_user_id, price, tx_hash) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run(uuidv4(), 'RESELL', ticketId, ticket.current_owner_id, req.user.id, resalePrice, result.txHash);
+
+      return res.json({
+        success: true,
+        message: `Ticket purchased for ${resalePrice} RLUSD (resale; ${newResaleCount} resales remaining)`,
+        royaltyPaid: result.royaltyPaid,
+        txHash: result.txHash,
+      });
+    }
+
+    // ── Primary sale (organizer → fan) ──
     const result = await buyTicket(
       client, buyerWallet, sellerWallet,
       ticket.token_id, ticket.original_price, issuerRow.value
     );
 
-    // Update ownership
     db.prepare('UPDATE tickets SET current_owner_id = ? WHERE id = ?').run(req.user.id, ticketId);
 
-    // Log transaction
     db.prepare(
       'INSERT INTO transactions (id, type, ticket_id, from_user_id, to_user_id, price, tx_hash) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(uuidv4(), 'BUY', ticketId, ticket.current_owner_id, req.user.id, ticket.original_price, result.txHash);
@@ -301,16 +362,20 @@ router.post('/list-for-sale', authMiddleware, async (req, res) => {
 router.get('/marketplace', async (req, res) => {
   try {
     const db = getDb();
-    // Get tickets listed for sale (metadata_json contains listedForSale:true)
-    // Also show tickets from organizers that haven't been bought yet
+    // Get tickets available for purchase:
+    // 1) Organizer-owned tickets (primary/first sale — no resale slot consumed)
+    // 2) Fan-listed resale tickets that still have resales remaining
     const tickets = db.prepare(`
       SELECT t.*, e.name as event_name, e.date as event_date, e.venue as event_venue,
              u.display_name as owner_name, u.role as owner_role
       FROM tickets t
       JOIN events e ON t.event_id = e.id
       JOIN users u ON t.current_owner_id = u.id
-      WHERE (u.role = 'organizer' AND t.resale_count = 0)
-         OR t.metadata_json LIKE '%"listedForSale":true%'
+      WHERE u.role = 'organizer'
+         OR (
+           t.metadata_json LIKE '%"listedForSale":true%'
+           AND (t.max_resales = 0 OR t.resale_count > 0)
+         )
       ORDER BY e.date ASC
     `).all();
 
@@ -320,7 +385,8 @@ router.get('/marketplace', async (req, res) => {
       return {
         ...t,
         listingPrice: meta.listingPrice || t.original_price,
-        isResale: t.resale_count > 0,
+        // isResale: resale_count has decreased from max (some resales used)
+        isResale: t.max_resales > 0 && t.resale_count < t.max_resales,
       };
     });
 

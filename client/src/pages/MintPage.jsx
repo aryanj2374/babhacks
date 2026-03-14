@@ -7,11 +7,10 @@ export default function MintPage() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState(null);
 
-  const [eventForm, setEventForm] = useState({ name: '', description: '', date: '', venue: '' });
+  const [eventForm, setEventForm] = useState({ name: '', description: '', date: '', venue: '', royaltyPercent: '10' });
   const [creatingEvent, setCreatingEvent] = useState(false);
 
   const [selectedEvent, setSelectedEvent] = useState('');
-  const [royaltyPercent, setRoyaltyPercent] = useState('10');
   const [seats, setSeats] = useState([
     { seat: 'VIP-A101', originalPrice: '150', maxResalePrice: '200', maxResales: '3' },
   ]);
@@ -33,10 +32,14 @@ export default function MintPage() {
     e.preventDefault();
     setCreatingEvent(true);
     setMessage(null);
-    const data = await api('/events', 'POST', { ...eventForm, date: eventForm.date + 'T20:00:00Z' });
+    const data = await api('/events', 'POST', {
+      ...eventForm,
+      date: eventForm.date + 'T20:00:00Z',
+      royaltyPercent: parseFloat(eventForm.royaltyPercent) || 10,
+    });
     if (data.success) {
-      setMessage({ type: 'success', text: `Event "${data.event.name}" created!` });
-      setEventForm({ name: '', description: '', date: '', venue: '' });
+      setMessage({ type: 'success', text: `Event "${data.event.name}" created! Royalty: ${data.event.royalty_percent}%` });
+      setEventForm({ name: '', description: '', date: '', venue: '', royaltyPercent: '10' });
       await loadEvents();
       setSelectedEvent(data.event.id);
     } else {
@@ -62,7 +65,7 @@ export default function MintPage() {
     if (!selectedEvent || seats.length === 0) return;
     setMinting(true);
     setMessage(null);
-    const data = await api('/tickets/mint', 'POST', { eventId: selectedEvent, seats, royaltyPercent: parseFloat(royaltyPercent) || 10 });
+    const data = await api('/tickets/mint', 'POST', { eventId: selectedEvent, seats });
     if (data.success) {
       setMessage({ type: 'success', text: `Minted ${data.tickets.length} ticket(s)! Now available on marketplace.` });
     } else {
@@ -113,6 +116,18 @@ export default function MintPage() {
                     value={eventForm.venue}
                     onChange={e => setEventForm({ ...eventForm, venue: e.target.value })}
                     placeholder="Crypto Arena, SF"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Royalty % <span style={{ fontSize: '0.62rem', color: 'var(--text-muted)', fontWeight: 400 }}>(0–50, applied to every resale)</span></label>
+                  <input
+                    type="number"
+                    value={eventForm.royaltyPercent}
+                    onChange={e => setEventForm({ ...eventForm, royaltyPercent: e.target.value })}
+                    min="0"
+                    max="50"
+                    step="0.5"
+                    placeholder="10"
                   />
                 </div>
                 <div className="form-group">
@@ -174,33 +189,19 @@ export default function MintPage() {
         <div className="panel">
           <div className="panel-header">
             <span className="panel-title"><ZapIcon size={11} /> Mint NFT Tickets</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              {events.length > 0 && (
-                <div className="form-group" style={{ margin: 0, minWidth: '140px' }}>
-                  <select
-                    value={selectedEvent}
-                    onChange={e => setSelectedEvent(e.target.value)}
-                    style={{ padding: '4px 8px', fontSize: '0.75rem' }}
-                  >
-                    {events.map(ev => (
-                      <option key={ev.id} value={ev.id}>{ev.name}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-              <div className="form-group" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', marginBottom: 0 }}>Royalty %</label>
-                <input
-                  type="number"
-                  value={royaltyPercent}
-                  onChange={e => setRoyaltyPercent(e.target.value)}
-                  min="0"
-                  max="50"
-                  step="0.5"
-                  style={{ padding: '4px 8px', fontSize: '0.75rem', width: '64px' }}
-                />
+            {events.length > 0 && (
+              <div className="form-group" style={{ margin: 0, minWidth: '140px' }}>
+                <select
+                  value={selectedEvent}
+                  onChange={e => setSelectedEvent(e.target.value)}
+                  style={{ padding: '4px 8px', fontSize: '0.75rem' }}
+                >
+                  {events.map(ev => (
+                    <option key={ev.id} value={ev.id}>{ev.name}</option>
+                  ))}
+                </select>
               </div>
-            </div>
+            )}
           </div>
 
           {events.length === 0 ? (
@@ -239,7 +240,7 @@ export default function MintPage() {
                     <div className="tpc-tear" />
                     <div className="tpc-footer">
                       <span className="tpc-meta">XRPL Testnet · XLS-20</span>
-                      <span className="tpc-meta">{royaltyPercent || 10}% royalty enforced</span>
+                      <span className="tpc-meta">{selectedEventObj?.royalty_percent ?? 10}% royalty enforced</span>
                     </div>
                   </div>
                   {seats.length > 1 && (

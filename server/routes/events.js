@@ -66,22 +66,26 @@ router.get('/:id', async (req, res) => {
 /**
  * POST /api/events
  * Create a new event (organizer only).
- * Body: { name, description, date, venue }
+ * Body: { name, description, date, venue, royaltyPercent }
+ * royaltyPercent: 0–50 (percentage, e.g. 10 = 10%). Defaults to 10.
  */
 router.post('/', authMiddleware, requireOrganizer, async (req, res) => {
   try {
-    const { name, description, date, venue } = req.body;
+    const { name, description, date, venue, royaltyPercent } = req.body;
 
     if (!name || !date) {
       return res.status(400).json({ success: false, error: 'Name and date are required' });
     }
 
+    // Clamp royalty to 0–50%; default 10%
+    const royaltyPct = Math.min(50, Math.max(0, parseFloat(royaltyPercent) || 10));
+
     const db = getDb();
     const eventId = uuidv4();
 
     db.prepare(
-      'INSERT INTO events (id, organizer_id, name, description, date, venue) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(eventId, req.user.id, name, description || '', date, venue || '');
+      'INSERT INTO events (id, organizer_id, name, description, date, venue, royalty_percent) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(eventId, req.user.id, name, description || '', date, venue || '', royaltyPct);
 
     const event = db.prepare('SELECT * FROM events WHERE id = ?').get(eventId);
 

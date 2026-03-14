@@ -92,6 +92,19 @@ function initSchema() {
       value TEXT NOT NULL
     );
   `);
+
+  // ── Migrations (idempotent — silently ignored if column already exists) ──
+
+  // Add royalty_percent to events (organizer sets this at event creation)
+  try { db.exec("ALTER TABLE events ADD COLUMN royalty_percent REAL NOT NULL DEFAULT 10"); } catch {}
+
+  // Track whether an organizer wallet has a RLUSD TrustLine established
+  try { db.exec("ALTER TABLE wallets ADD COLUMN trust_line_established INTEGER NOT NULL DEFAULT 0"); } catch {}
+
+  // Fix resale_count semantics: now stores REMAINING resales (counts down from max_resales).
+  // Existing tickets with resale_count=0 and max_resales>0 had the old "never resold" value —
+  // reset them so they start with their full resale allowance remaining.
+  db.exec("UPDATE tickets SET resale_count = max_resales WHERE resale_count = 0 AND max_resales > 0");
 }
 
 module.exports = { getDb };
