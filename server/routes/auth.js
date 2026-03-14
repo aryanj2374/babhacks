@@ -12,7 +12,10 @@ const { getDb } = require('../db');
 const { generateToken, authMiddleware } = require('../auth');
 const { encrypt } = require('../crypto');
 const { getClient } = require('../xrplClient');
-const { createFundedWallet } = require('../../src/wallet');
+const { createFundedWallet, establishTrustLine } = require('../../src/wallet');
+const { sleep } = require('../../src/utils');
+const MongoUser = require('../models/User');
+const logger = require('../logger');
 
 /**
  * POST /api/auth/signup
@@ -53,13 +56,27 @@ router.post('/signup', async (req, res) => {
 
     const token = generateToken({ id: userId, email, role: userRole });
 
+    // ── Sync to MongoDB ──
+    try {
+      await MongoUser.findOneAndUpdate(
+        { email },
+        { email, role: userRole, displayName, xrplAddress: wallet.address, xrplSeed: encryptedSeed },
+        { upsert: true, new: true }
+      );
+      logger.mongoSync('User', 'upsert', email);
+    } catch (mongoErr) {
+      logger.error('MONGO_SYNC signup', mongoErr);
+    }
+
+    logger.info('AUTH', `Signup: ${email} (${userRole}) wallet=${wallet.address.slice(0, 12)}…`);
+
     res.json({
       success: true,
       token,
       user: { id: userId, email, role: userRole, displayName, wallet: wallet.address },
     });
   } catch (err) {
-    console.error('Signup error:', err);
+    logger.error('AUTH signup', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -89,8 +106,9 @@ router.post('/login', async (req, res) => {
       token,
       user: { id: user.id, email: user.email, role: user.role, displayName: user.display_name, wallet: wallet?.xrpl_address || null },
     });
+    logger.info('AUTH', `Login: ${email} (${user.role})`);
   } catch (err) {
-    console.error('Login error:', err);
+    logger.error('AUTH login', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });

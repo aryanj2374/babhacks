@@ -9,6 +9,8 @@ const router = express.Router();
 
 const { getDb } = require('../db');
 const { authMiddleware, requireOrganizer } = require('../auth');
+const MongoEvent = require('../models/Event');
+const logger = require('../logger');
 
 /**
  * GET /api/events
@@ -85,8 +87,27 @@ router.post('/', authMiddleware, requireOrganizer, async (req, res) => {
 
     const event = db.prepare('SELECT * FROM events WHERE id = ?').get(eventId);
 
+    // ── Sync to MongoDB ──
+    try {
+      const walletRow = db.prepare('SELECT xrpl_address FROM wallets WHERE user_id = ?').get(req.user.id);
+      await MongoEvent.create({
+        eventName: name,
+        organizerAddress: walletRow?.xrpl_address || '',
+        date: date || '',
+        venue: venue || '',
+        description: description || '',
+        ticketIds: [],
+        sqliteId: eventId,
+      });
+      logger.mongoSync('Event', 'create', eventId);
+    } catch (mongoErr) {
+      logger.error('MONGO_SYNC event', mongoErr);
+    }
+
+    logger.info('EVENTS', `Created event "${name}" (id=${eventId.slice(0, 8)}…)`);
     res.json({ success: true, event });
   } catch (err) {
+    logger.error('EVENTS create', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
