@@ -202,19 +202,26 @@ router.post('/buy', authMiddleware, async (req, res) => {
     }
 
     // Primary sale (organizer → fan)
-    const result = await buyTicket(client, buyerWallet, sellerWallet, ticket.tokenId, ticket.price);
+    const salePrice = ticket.listingPrice && parseFloat(ticket.listingPrice) > 0
+      ? ticket.listingPrice
+      : ticket.price;
+    if (!salePrice || parseFloat(salePrice) <= 0) {
+      return res.status(400).json({ success: false, error: 'Ticket price is not set' });
+    }
+    const result = await buyTicket(client, buyerWallet, sellerWallet, ticket.tokenId, salePrice);
 
     ticket.ownerAddress = buyerWallet.address;
     ticket.currentOwnerId = req.user.id;
+    ticket.price = salePrice;
     ticket.listedForSale = false;
     ticket.listingPrice = '0';
     await ticket.save();
 
-    logger.buy({ buyerAddress: buyerWallet.address, ticketId: ticket.tokenId, amount: ticket.price, txHash: result.txHash });
+    logger.buy({ buyerAddress: buyerWallet.address, ticketId: ticket.tokenId, amount: salePrice, txHash: result.txHash });
 
     res.json({
       success: true,
-      message: `Ticket purchased for ${ticket.price} XRP`,
+      message: `Ticket purchased for ${salePrice} XRP`,
       txHash: result.txHash,
     });
   } catch (err) {
