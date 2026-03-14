@@ -9,7 +9,8 @@ const mongoose = require('mongoose');
 const ticketSchema = new mongoose.Schema({
   tokenId:        { type: String, required: true, unique: true }, // XRPL NFT tokenId
   ownerAddress:   { type: String, required: true },
-  price:          { type: String, default: '0' },                 // original or current price
+  currentOwnerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  price:          { type: String, default: '0' }, // original or current price
   maxResalePrice: { type: String, default: '0' },
   maxResales:     { type: Number, default: 3 },
   resaleCount:    { type: Number, default: 0 },
@@ -18,13 +19,14 @@ const ticketSchema = new mongoose.Schema({
   redeemed:       { type: Boolean, default: false },
   listedForSale:  { type: Boolean, default: false },
   listingPrice:   { type: String, default: '0' },
-  txHash:         { type: String, default: '' },                  // mint tx hash
-  sqliteId:       { type: String, default: '' },                  // cross-reference
+  txHash:         { type: String, default: '' },
 }, {
   timestamps: true,
+  toJSON: { virtuals: true },
 });
 
 ticketSchema.index({ ownerAddress: 1 });
+ticketSchema.index({ currentOwnerId: 1 });
 ticketSchema.index({ eventId: 1 });
 
 module.exports = mongoose.model('Ticket', ticketSchema);

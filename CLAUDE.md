@@ -42,14 +42,16 @@ JWT stored in `localStorage`. `server/auth.js` exports `authMiddleware` (verify 
 ### XRPL integration
 `server/xrplClient.js` manages a singleton WebSocket connection to `wss://s.altnet.rippletest.net:51233`. All XRPL operations go through `src/wallet.js` and `src/ticket.js`:
 - Wallets are created on signup via `client.fundWallet()` (Testnet faucet, takes 10–20s)
-- NFT tickets use `NFTokenMint` with `TransferFee: 1000` (10% royalty, protocol-enforced)
-- Buys/resales use `NFTokenCreateOffer` + `NFTokenAcceptOffer` (atomic swap)
-- RLUSD is a simulated stablecoin: TrustSet → Payment (IOU) from platform issuer wallet stored in `platform_config` table
+- Existing wallets can be refilled via `POST /api/wallet/fund-xrp` (calls `client.fundWallet(wallet)` again)
+- All payments use **native XRP** (no stablecoin/IOU). Amounts are stored as XRP strings (e.g. `"10"`); converted to drops via `xrpl.xrpToDrops()` when building transactions
+- NFT tickets use `NFTokenMint` with a configurable `TransferFee` (royalty in XRPL basis points where 50000=50%, 10000=10%, 1000=1%). Defaults to `10000` (10%)
+- Organizers can set a custom royalty percentage (0–50%) per mint batch; the route converts it: `royaltyBps = pct * 1000`
+- Buys/resales use `NFTokenCreateOffer` (seller) + `NFTokenAcceptOffer` (buyer) — atomic swap, XRP transferred automatically
 
 ### Anti-scalping enforcement
 Two layers:
 1. **Application layer** — `tickets.max_resale_price` and `tickets.max_resales` checked in `server/routes/tickets.js` before any on-chain action
-2. **Protocol layer** — `TransferFee` auto-collects 10% royalty on every NFT resale at the XRPL level
+2. **Protocol layer** — `TransferFee` auto-collects royalty on every NFT resale at the XRPL level (protocol-enforced, no smart contract needed)
 
 ### Database
 SQLite via `better-sqlite3` (synchronous). Schema defined inline in `server/db.js`. Key tables: `users`, `wallets`, `events`, `tickets`, `transactions`, `platform_config`. Wallet seeds are AES-256-CBC encrypted (`server/crypto.js`) before storage.
@@ -69,5 +71,5 @@ SQLite via `better-sqlite3` (synchronous). Schema defined inline in `server/db.j
 
 ### Test accounts (after `npm run seed`)
 - `organizer@test.com` / `password123` — can create events, mint tickets
-- `fan1@test.com` / `password123` — fan, pre-funded with RLUSD
-- `fan2@test.com` / `password123` — fan, pre-funded with RLUSD
+- `fan1@test.com` / `password123` — fan
+- `fan2@test.com` / `password123` — fan

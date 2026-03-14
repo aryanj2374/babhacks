@@ -1,22 +1,22 @@
 /**
  * Mongoose Model — User
- *
- * Mirrors the SQLite users + wallets tables for MongoDB queries.
  */
 
 const mongoose = require('mongoose');
 
 const userSchema = new mongoose.Schema({
   email:        { type: String, required: true, unique: true, lowercase: true, trim: true },
+  passwordHash: { type: String, required: true },
   role:         { type: String, enum: ['organizer', 'fan'], default: 'fan' },
   displayName:  { type: String, default: '' },
   xrplAddress:  { type: String, default: '' },
-  xrplSeed:     { type: String, default: '' }, // AES-encrypted seed — NOT plaintext
+  xrplSeed:               { type: String, default: '' }, // AES-encrypted seed — NOT plaintext
+  trustLineEstablished:   { type: Boolean, default: false }, // RLUSD TrustLine set on-chain
 }, {
   timestamps: true,
+  toJSON: { virtuals: true },
 });
 
-// Index by role for quick organizer lookups
 userSchema.index({ role: 1 });
 userSchema.index({ xrplAddress: 1 });
 

@@ -4,20 +4,20 @@
 
 const express = require('express');
 const crypto = require('crypto');
-const uuidv4 = () => crypto.randomUUID();
 const QRCode = require('qrcode');
 const xrpl = require('xrpl');
 const router = express.Router();
 
-const { getDb } = require('../db');
 const { authMiddleware, requireOrganizer } = require('../auth');
 const { decrypt } = require('../crypto');
 const { getClient } = require('../xrplClient');
 const { mintTicket, buyTicket, resellTicket } = require('../../src/ticket');
 const { getRLUSDBalance, establishTrustLine } = require('../../src/wallet');
 const { sleep } = require('../../src/utils');
+const { getDb } = require('../db');
 const MongoTicket = require('../models/Ticket');
 const MongoEvent  = require('../models/Event');
+const MongoUser   = require('../models/User');
 const logger      = require('../logger');
 
 /**
@@ -25,15 +25,28 @@ const logger      = require('../logger');
  */
 router.get('/my', authMiddleware, async (req, res) => {
   try {
-    const db = getDb();
-    const tickets = db.prepare(`
-      SELECT t.*, e.name as event_name, e.date as event_date, e.venue as event_venue
-      FROM tickets t
-      JOIN events e ON t.event_id = e.id
-      WHERE t.current_owner_id = ?
-      ORDER BY e.date ASC
-    `).all(req.user.id);
-    res.json({ success: true, tickets });
+    const tickets = await MongoTicket.find({ currentOwnerId: req.user.id })
+      .populate('eventId')
+      .lean();
+
+    const result = tickets.map(t => ({
+      id: t._id.toString(),
+      token_id: t.tokenId,
+      seat: t.seat,
+      original_price: t.price,
+      max_resale_price: t.maxResalePrice,
+      max_resales: t.maxResales,
+      resale_count: t.resaleCount,
+      redeemed: t.redeemed,
+      listed_for_sale: t.listedForSale,
+      listing_price: t.listingPrice,
+      tx_hash: t.txHash,
+      event_name: t.eventId?.name || '',
+      event_date: t.eventId?.date || '',
+      event_venue: t.eventId?.venue || '',
+    }));
+
+    res.json({ success: true, tickets: result });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -43,7 +56,7 @@ router.get('/my', authMiddleware, async (req, res) => {
  * POST /api/tickets/mint
  * Mint NFT tickets for an event (organizer only).
  * Body: { eventId, seats: [{ seat, originalPrice, maxResalePrice, maxResales }] }
- * Royalty is read from the event's royalty_percent field (set at event creation).
+ * Royalty is read from the event's royaltyPercent field (set at event creation).
  */
 router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
   try {
@@ -52,36 +65,32 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
       return res.status(400).json({ success: false, error: 'eventId and seats array are required' });
     }
 
-    const db = getDb();
-    const event = db.prepare('SELECT * FROM events WHERE id = ? AND organizer_id = ?').get(eventId, req.user.id);
+    const event = await MongoEvent.findOne({ _id: eventId, organizerId: req.user.id });
     if (!event) return res.status(404).json({ success: false, error: 'Event not found or not yours' });
 
-    const walletRow = db.prepare('SELECT * FROM wallets WHERE user_id = ?').get(req.user.id);
-    if (!walletRow) return res.status(400).json({ success: false, error: 'No wallet found' });
+    const user = await MongoUser.findById(req.user.id);
+    if (!user || !user.xrplSeed) return res.status(400).json({ success: false, error: 'No wallet found' });
 
     const client = await getClient();
-    const organizerWallet = xrpl.Wallet.fromSeed(decrypt(walletRow.encrypted_seed));
+    const organizerWallet = xrpl.Wallet.fromSeed(decrypt(user.xrplSeed));
 
     // Read royalty from the event record (set at event creation time)
     // XRPL scale: 50000=50%, 10000=10%, 1000=1%, 1=0.001%
-    const royaltyPct = event.royalty_percent ?? 10;
+    const royaltyPct = event.royaltyPercent ?? 10;
     const royaltyBps = Math.round(Math.min(50, Math.max(0, royaltyPct)) * 1000);
 
     // Ensure organizer has a RLUSD TrustLine so royalties can be received.
-    // This is done once and recorded in the DB to avoid repeated on-chain TrustSet calls.
-    if (!walletRow.trust_line_established) {
-      const issuerRow = db.prepare("SELECT value FROM platform_config WHERE key = 'issuer_address'").get();
-      if (issuerRow) {
-        await establishTrustLine(client, organizerWallet, issuerRow.value);
-        db.prepare('UPDATE wallets SET trust_line_established = 1 WHERE user_id = ?').run(req.user.id);
-      }
+    const db = getDb();
+    const issuerRow = db.prepare("SELECT value FROM platform_config WHERE key = 'issuer_address'").get();
+    if (issuerRow) {
+      await establishTrustLine(client, organizerWallet, issuerRow.value);
     }
 
     const mintedTickets = [];
 
     for (const seatInfo of seats) {
       const metadata = {
-        eventId: event.id,
+        eventId: event._id.toString(),
         eventName: event.name,
         seat: seatInfo.seat,
         originalPrice: seatInfo.originalPrice || '10',
@@ -93,54 +102,36 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
       const result = await mintTicket(client, organizerWallet, metadata, royaltyBps);
       await sleep(1500);
 
-      const ticketId = uuidv4();
-      db.prepare(`
-        INSERT INTO tickets (id, event_id, token_id, seat, original_price, max_resale_price, max_resales, resale_count, metadata_json, tx_hash, current_owner_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        ticketId, eventId, result.tokenId, metadata.seat,
-        metadata.originalPrice, metadata.maxResalePrice, metadata.maxResales,
-        metadata.maxResales, // resale_count starts equal to max_resales (remaining resales)
-        JSON.stringify(result.metadata), result.txHash, req.user.id
-      );
+      const mongoTicket = await MongoTicket.create({
+        tokenId: result.tokenId,
+        ownerAddress: organizerWallet.address,
+        currentOwnerId: req.user.id,
+        price: metadata.originalPrice,
+        maxResalePrice: metadata.maxResalePrice,
+        maxResales: metadata.maxResales,
+        resaleCount: metadata.maxResales, // starts at max (countdown to 0)
+        eventId: event._id,
+        seat: metadata.seat,
+        redeemed: false,
+        listedForSale: true,       // organizer tickets appear in marketplace immediately
+        listingPrice: metadata.originalPrice,
+        txHash: result.txHash,
+      });
 
-      db.prepare(
-        'INSERT INTO transactions (id, type, ticket_id, from_user_id, tx_hash) VALUES (?, ?, ?, ?, ?)'
-      ).run(uuidv4(), 'MINT', ticketId, req.user.id, result.txHash);
+      event.ticketIds.push(result.tokenId);
 
-      mintedTickets.push({ ticketId, tokenId: result.tokenId, seat: metadata.seat, txHash: result.txHash });
+      mintedTickets.push({
+        ticketId: mongoTicket._id.toString(),
+        tokenId: result.tokenId,
+        seat: metadata.seat,
+        txHash: result.txHash,
+      });
     }
 
-    // ── Sync to MongoDB ──
-    try {
-      const walletRow2 = db.prepare('SELECT xrpl_address FROM wallets WHERE user_id = ?').get(req.user.id);
-      const mongoEvent = await MongoEvent.findOne({ sqliteId: eventId });
-      for (const mt of mintedTickets) {
-        await MongoTicket.create({
-          tokenId: mt.tokenId,
-          ownerAddress: walletRow2?.xrpl_address || '',
-          price: seats.find(s => s.seat === mt.seat)?.originalPrice || '10',
-          maxResalePrice: seats.find(s => s.seat === mt.seat)?.maxResalePrice || '15',
-          maxResales: parseInt(seats.find(s => s.seat === mt.seat)?.maxResales) || 3,
-          resaleCount: 0,
-          eventId: mongoEvent?._id || null,
-          seat: mt.seat,
-          redeemed: false,
-          txHash: mt.txHash,
-          sqliteId: mt.ticketId,
-        });
-        if (mongoEvent) {
-          mongoEvent.ticketIds.push(mt.tokenId);
-        }
-        logger.mongoSync('Ticket', 'create', mt.tokenId.slice(0, 16));
-      }
-      if (mongoEvent) await mongoEvent.save();
-    } catch (mongoErr) {
-      logger.error('MONGO_SYNC mint', mongoErr);
-    }
+    await event.save();
 
     logger.mint({
-      eventId,
+      eventId: event._id.toString(),
       eventName: event.name,
       ticketIds: mintedTickets.map(t => t.tokenId),
       organizerAddress: organizerWallet.address,
@@ -165,77 +156,70 @@ router.post('/buy', authMiddleware, async (req, res) => {
     const { ticketId } = req.body;
     if (!ticketId) return res.status(400).json({ success: false, error: 'ticketId is required' });
 
-    const db = getDb();
-    // Join with owner's role so we can detect primary vs resale
-    const ticket = db.prepare(`
-      SELECT t.*, u.role as owner_role
-      FROM tickets t
-      JOIN users u ON t.current_owner_id = u.id
-      WHERE t.id = ?
-    `).get(ticketId);
+    // Populate currentOwnerId so we can check seller role (primary vs resale)
+    const ticket = await MongoTicket.findById(ticketId)
+      .populate('currentOwnerId', 'role xrplSeed xrplAddress displayName');
     if (!ticket) return res.status(404).json({ success: false, error: 'Ticket not found' });
-    if (ticket.current_owner_id === req.user.id) {
+    if (ticket.currentOwnerId?._id?.toString() === req.user.id) {
       return res.status(400).json({ success: false, error: 'You already own this ticket' });
     }
 
-    const buyerWalletRow = db.prepare('SELECT * FROM wallets WHERE user_id = ?').get(req.user.id);
-    const sellerWalletRow = db.prepare('SELECT * FROM wallets WHERE user_id = ?').get(ticket.current_owner_id);
-    if (!buyerWalletRow || !sellerWalletRow) {
+    const buyer = await MongoUser.findById(req.user.id);
+    const seller = ticket.currentOwnerId; // already populated
+    if (!buyer?.xrplSeed || !seller?.xrplSeed) {
       return res.status(400).json({ success: false, error: 'Wallet not found' });
     }
 
+    const db = getDb();
     const issuerRow = db.prepare("SELECT value FROM platform_config WHERE key = 'issuer_address'").get();
     if (!issuerRow) {
       return res.status(500).json({ success: false, error: 'Platform issuer not configured' });
     }
 
     const client = await getClient();
-    const buyerWallet = xrpl.Wallet.fromSeed(decrypt(buyerWalletRow.encrypted_seed));
-    const sellerWallet = xrpl.Wallet.fromSeed(decrypt(sellerWalletRow.encrypted_seed));
+    const buyerWallet = xrpl.Wallet.fromSeed(decrypt(buyer.xrplSeed));
+    const sellerWallet = xrpl.Wallet.fromSeed(decrypt(seller.xrplSeed));
 
-    const meta = JSON.parse(ticket.metadata_json || '{}');
-    const isResale = ticket.owner_role !== 'organizer';
+    const isResale = seller.role !== 'organizer';
 
     if (isResale) {
       // ── Secondary / resale purchase ──
-      if (ticket.max_resales > 0 && ticket.resale_count <= 0) {
+      if (ticket.maxResales > 0 && ticket.resaleCount <= 0) {
         return res.status(400).json({
           success: false,
-          error: `This ticket has no resales remaining (0 / ${ticket.max_resales})`,
+          error: `This ticket has no resales remaining (0 / ${ticket.maxResales})`,
         });
       }
 
-      const resalePrice = meta.listingPrice || ticket.original_price;
-      const ticketMeta = { ...meta, resalesRemaining: ticket.resale_count };
+      const resalePrice = ticket.listingPrice || ticket.price;
+      const ticketMeta = {
+        maxResalePrice: ticket.maxResalePrice,
+        maxResales: ticket.maxResales,
+        resalesRemaining: ticket.resaleCount,
+        eventDate: ticket.eventId?.date,
+      };
 
       const result = await resellTicket(
         client, sellerWallet, buyerWallet,
-        ticket.token_id, resalePrice, issuerRow.value, ticketMeta
+        ticket.tokenId, resalePrice, issuerRow.value, ticketMeta
       );
 
-      const newResaleCount = ticket.max_resales > 0 ? ticket.resale_count - 1 : 0;
+      const newResaleCount = ticket.maxResales > 0 ? ticket.resaleCount - 1 : 0;
 
-      // Clear listing flag, update owner, decrement resale count
-      meta.listedForSale = false;
-      delete meta.listingPrice;
-      db.prepare(
-        'UPDATE tickets SET current_owner_id = ?, resale_count = ?, metadata_json = ? WHERE id = ?'
-      ).run(req.user.id, newResaleCount, JSON.stringify(meta), ticketId);
+      ticket.ownerAddress = buyerWallet.address;
+      ticket.currentOwnerId = req.user.id;
+      ticket.resaleCount = newResaleCount;
+      ticket.price = resalePrice;
+      ticket.listedForSale = false;
+      ticket.listingPrice = '0';
+      await ticket.save();
 
-      db.prepare(
-        'INSERT INTO transactions (id, type, ticket_id, from_user_id, to_user_id, price, tx_hash) VALUES (?, ?, ?, ?, ?, ?, ?)'
-      ).run(uuidv4(), 'RESELL', ticketId, ticket.current_owner_id, req.user.id, resalePrice, result.txHash);
-
-      // ── Sync to MongoDB ──
-      try {
-        await MongoTicket.findOneAndUpdate(
-          { tokenId: ticket.token_id },
-          { ownerAddress: buyerWallet.address, price: resalePrice, resaleCount: newResaleCount, listedForSale: false, listingPrice: '0' }
-        );
-        logger.mongoSync('Ticket', 'resell-buy', ticket.token_id.slice(0, 16));
-      } catch (mongoErr) {
-        logger.error('MONGO_SYNC resell-buy', mongoErr);
-      }
+      logger.buy({
+        buyerAddress: buyerWallet.address,
+        ticketId: ticket.tokenId,
+        amount: resalePrice,
+        txHash: result.txHash,
+      });
 
       return res.json({
         success: true,
@@ -248,36 +232,25 @@ router.post('/buy', authMiddleware, async (req, res) => {
     // ── Primary sale (organizer → fan) ──
     const result = await buyTicket(
       client, buyerWallet, sellerWallet,
-      ticket.token_id, ticket.original_price, issuerRow.value
+      ticket.tokenId, ticket.price, issuerRow.value
     );
 
-    db.prepare('UPDATE tickets SET current_owner_id = ? WHERE id = ?').run(req.user.id, ticketId);
-
-    db.prepare(
-      'INSERT INTO transactions (id, type, ticket_id, from_user_id, to_user_id, price, tx_hash) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).run(uuidv4(), 'BUY', ticketId, ticket.current_owner_id, req.user.id, ticket.original_price, result.txHash);
-
-    // ── Sync to MongoDB ──
-    try {
-      await MongoTicket.findOneAndUpdate(
-        { tokenId: ticket.token_id },
-        { ownerAddress: buyerWallet.address, listedForSale: false, listingPrice: '0' }
-      );
-      logger.mongoSync('Ticket', 'buy', ticket.token_id.slice(0, 16));
-    } catch (mongoErr) {
-      logger.error('MONGO_SYNC buy', mongoErr);
-    }
+    ticket.ownerAddress = buyerWallet.address;
+    ticket.currentOwnerId = req.user.id;
+    ticket.listedForSale = false;
+    ticket.listingPrice = '0';
+    await ticket.save();
 
     logger.buy({
       buyerAddress: buyerWallet.address,
-      ticketId: ticket.token_id,
-      amount: ticket.original_price,
+      ticketId: ticket.tokenId,
+      amount: ticket.price,
       txHash: result.txHash,
     });
 
     res.json({
       success: true,
-      message: `Ticket purchased for ${ticket.original_price} RLUSD`,
+      message: `Ticket purchased for ${ticket.price} RLUSD`,
       txHash: result.txHash,
     });
   } catch (err) {
@@ -297,73 +270,63 @@ router.post('/resell', authMiddleware, async (req, res) => {
       return res.status(400).json({ success: false, error: 'ticketId, buyerId, and resalePrice are required' });
     }
 
-    const db = getDb();
-    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+    const ticket = await MongoTicket.findById(ticketId).populate('eventId');
     if (!ticket) return res.status(404).json({ success: false, error: 'Ticket not found' });
-    if (ticket.current_owner_id !== req.user.id) {
+    if (ticket.currentOwnerId?.toString() !== req.user.id) {
       return res.status(403).json({ success: false, error: 'You do not own this ticket' });
     }
 
-    const sellerWalletRow = db.prepare('SELECT * FROM wallets WHERE user_id = ?').get(req.user.id);
-    const buyerWalletRow = db.prepare('SELECT * FROM wallets WHERE user_id = ?').get(buyerId);
-    if (!sellerWalletRow || !buyerWalletRow) {
+    const seller = await MongoUser.findById(req.user.id);
+    const buyer = await MongoUser.findById(buyerId);
+    if (!seller?.xrplSeed || !buyer?.xrplSeed) {
       return res.status(400).json({ success: false, error: 'Wallet not found' });
     }
 
+    const db = getDb();
     const issuerRow = db.prepare("SELECT value FROM platform_config WHERE key = 'issuer_address'").get();
     if (!issuerRow) {
       return res.status(500).json({ success: false, error: 'Platform issuer not configured' });
     }
 
     const client = await getClient();
-    const sellerWallet = xrpl.Wallet.fromSeed(decrypt(sellerWalletRow.encrypted_seed));
-    const buyerWallet = xrpl.Wallet.fromSeed(decrypt(buyerWalletRow.encrypted_seed));
+    const sellerWallet = xrpl.Wallet.fromSeed(decrypt(seller.xrplSeed));
+    const buyerWallet = xrpl.Wallet.fromSeed(decrypt(buyer.xrplSeed));
 
-    const metadata = JSON.parse(ticket.metadata_json || '{}');
-    // resale_count is remaining resales (countdown). 0 = no resales left.
-    metadata.resalesRemaining = ticket.resale_count;
-
+    // resaleCount is remaining resales (countdown). 0 = no resales left.
     // Pre-check before hitting XRPL: block immediately if no resales remain
-    if (ticket.max_resales > 0 && ticket.resale_count <= 0) {
+    if (ticket.maxResales > 0 && ticket.resaleCount <= 0) {
       return res.status(400).json({
         success: false,
-        error: `This ticket has no resales remaining (0 / ${ticket.max_resales})`,
+        error: `This ticket has no resales remaining (0 / ${ticket.maxResales})`,
       });
     }
 
-    const result = await resellTicket(client, sellerWallet, buyerWallet, ticket.token_id, resalePrice, issuerRow.value, metadata);
+    const metadata = {
+      maxResalePrice: ticket.maxResalePrice,
+      maxResales: ticket.maxResales,
+      resalesRemaining: ticket.resaleCount,
+      eventDate: ticket.eventId?.date,
+    };
 
-    // Decrement remaining resale count; unlimited (max_resales=0) stays at 0
-    const newResaleCount = ticket.max_resales > 0 ? ticket.resale_count - 1 : 0;
+    const result = await resellTicket(
+      client, sellerWallet, buyerWallet,
+      ticket.tokenId, resalePrice, issuerRow.value, metadata
+    );
 
-    db.prepare(
-      'UPDATE tickets SET current_owner_id = ?, resale_count = ? WHERE id = ?'
-    ).run(buyerId, newResaleCount, ticketId);
+    // Decrement remaining resale count; unlimited (maxResales=0) stays at 0
+    const newResaleCount = ticket.maxResales > 0 ? ticket.resaleCount - 1 : 0;
 
-    db.prepare(
-      'INSERT INTO transactions (id, type, ticket_id, from_user_id, to_user_id, price, tx_hash) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).run(uuidv4(), 'RESELL', ticketId, req.user.id, buyerId, resalePrice, result.txHash);
-
-    // ── Sync to MongoDB ──
-    try {
-      await MongoTicket.findOneAndUpdate(
-        { tokenId: ticket.token_id },
-        {
-          ownerAddress: buyerWallet.address,
-          price: resalePrice,
-          resaleCount: newResaleCount,
-          listedForSale: false,
-          listingPrice: '0',
-        }
-      );
-      logger.mongoSync('Ticket', 'resell', ticket.token_id.slice(0, 16));
-    } catch (mongoErr) {
-      logger.error('MONGO_SYNC resell', mongoErr);
-    }
+    ticket.ownerAddress = buyerWallet.address;
+    ticket.currentOwnerId = buyerId;
+    ticket.resaleCount = newResaleCount;
+    ticket.price = resalePrice;
+    ticket.listedForSale = false;
+    ticket.listingPrice = '0';
+    await ticket.save();
 
     logger.resell({
       sellerAddress: sellerWallet.address,
-      ticketId: ticket.token_id,
+      ticketId: ticket.tokenId,
       resalePrice,
       txHash: result.txHash,
       royaltyPaid: result.royaltyPaid,
@@ -392,47 +355,31 @@ router.post('/list-for-sale', authMiddleware, async (req, res) => {
       return res.status(400).json({ success: false, error: 'ticketId and resalePrice required' });
     }
 
-    const db = getDb();
-    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+    const ticket = await MongoTicket.findById(ticketId);
     if (!ticket) return res.status(404).json({ success: false, error: 'Ticket not found' });
-    if (ticket.current_owner_id !== req.user.id) {
+    if (ticket.currentOwnerId?.toString() !== req.user.id) {
       return res.status(403).json({ success: false, error: 'You do not own this ticket' });
     }
 
     // Anti-scalping check: price cap
-    const maxPrice = parseFloat(ticket.max_resale_price);
-    if (parseFloat(resalePrice) > maxPrice) {
+    if (parseFloat(resalePrice) > parseFloat(ticket.maxResalePrice)) {
       return res.status(400).json({
         success: false,
-        error: `Price exceeds the maximum allowed resale price of ${ticket.max_resale_price} RLUSD`,
+        error: `Price exceeds the maximum allowed resale price of ${ticket.maxResalePrice} RLUSD`,
       });
     }
 
-    // Anti-scalping check: resale count (resale_count is remaining, 0 = blocked)
-    if (ticket.max_resales > 0 && ticket.resale_count <= 0) {
+    // Anti-scalping check: resale count (resaleCount is remaining, 0 = blocked)
+    if (ticket.maxResales > 0 && ticket.resaleCount <= 0) {
       return res.status(400).json({
         success: false,
-        error: `This ticket has no resales remaining (0 / ${ticket.max_resales})`,
+        error: `This ticket has no resales remaining (0 / ${ticket.maxResales})`,
       });
     }
 
-    // Store listing info in metadata
-    const metadata = JSON.parse(ticket.metadata_json || '{}');
-    metadata.listedForSale = true;
-    metadata.listingPrice = resalePrice;
-
-    db.prepare('UPDATE tickets SET metadata_json = ? WHERE id = ?').run(JSON.stringify(metadata), ticketId);
-
-    // ── Sync to MongoDB ──
-    try {
-      await MongoTicket.findOneAndUpdate(
-        { sqliteId: ticketId },
-        { listedForSale: true, listingPrice: resalePrice }
-      );
-      logger.mongoSync('Ticket', 'list-for-sale', ticketId.slice(0, 16));
-    } catch (mongoErr) {
-      logger.error('MONGO_SYNC list-for-sale', mongoErr);
-    }
+    ticket.listedForSale = true;
+    ticket.listingPrice = resalePrice;
+    await ticket.save();
 
     logger.info('TICKETS', `Listed ticket ${ticketId.slice(0, 8)}… for ${resalePrice} RLUSD`);
     res.json({ success: true, message: 'Ticket listed for sale' });
@@ -446,33 +393,29 @@ router.post('/list-for-sale', authMiddleware, async (req, res) => {
  */
 router.get('/marketplace', async (req, res) => {
   try {
-    const db = getDb();
-    // Get tickets available for purchase:
-    // 1) Organizer-owned tickets (primary/first sale — no resale slot consumed)
-    // 2) Fan-listed resale tickets that still have resales remaining
-    const tickets = db.prepare(`
-      SELECT t.*, e.name as event_name, e.date as event_date, e.venue as event_venue,
-             u.display_name as owner_name, u.role as owner_role
-      FROM tickets t
-      JOIN events e ON t.event_id = e.id
-      JOIN users u ON t.current_owner_id = u.id
-      WHERE u.role = 'organizer'
-         OR (
-           t.metadata_json LIKE '%"listedForSale":true%'
-           AND (t.max_resales = 0 OR t.resale_count > 0)
-         )
-      ORDER BY e.date ASC
-    `).all();
+    const tickets = await MongoTicket.find({ listedForSale: true })
+      .populate('eventId')
+      .populate('currentOwnerId', 'displayName role')
+      .lean();
 
-    const enriched = tickets.map(t => {
-      const meta = JSON.parse(t.metadata_json || '{}');
-      return {
-        ...t,
-        listingPrice: meta.listingPrice || t.original_price,
-        // isResale: resale_count has decreased from max (some resales used)
-        isResale: t.max_resales > 0 && t.resale_count < t.max_resales,
-      };
-    });
+    const enriched = tickets.map(t => ({
+      id: t._id.toString(),
+      token_id: t.tokenId,
+      seat: t.seat,
+      original_price: t.price,
+      max_resale_price: t.maxResalePrice,
+      max_resales: t.maxResales,
+      resale_count: t.resaleCount,
+      redeemed: t.redeemed,
+      event_name: t.eventId?.name || '',
+      event_date: t.eventId?.date || '',
+      event_venue: t.eventId?.venue || '',
+      owner_name: t.currentOwnerId?.displayName || '',
+      owner_role: t.currentOwnerId?.role || '',
+      listingPrice: t.listingPrice || t.price,
+      // isResale: owner is not the organizer (fan-to-fan secondary sale)
+      isResale: t.currentOwnerId?.role !== 'organizer',
+    }));
 
     res.json({ success: true, tickets: enriched });
   } catch (err) {
@@ -485,17 +428,30 @@ router.get('/marketplace', async (req, res) => {
  */
 router.get('/:id/qr', authMiddleware, async (req, res) => {
   try {
-    const db = getDb();
-    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(req.params.id);
+    const ticket = await MongoTicket.findById(req.params.id);
     if (!ticket) return res.status(404).json({ success: false, error: 'Ticket not found' });
 
-    const qrData = JSON.stringify({ ticketId: ticket.id, tokenId: ticket.token_id, seat: ticket.seat, eventId: ticket.event_id });
+    const qrData = JSON.stringify({
+      ticketId: ticket._id.toString(),
+      tokenId: ticket.tokenId,
+      seat: ticket.seat,
+      eventId: ticket.eventId?.toString(),
+    });
     const qrDataUrl = await QRCode.toDataURL(qrData, {
       width: 300, margin: 2,
       color: { dark: '#6366f1', light: '#0a0a0f' },
     });
 
-    res.json({ success: true, qrCode: qrDataUrl, ticket });
+    res.json({
+      success: true,
+      qrCode: qrDataUrl,
+      ticket: {
+        id: ticket._id.toString(),
+        token_id: ticket.tokenId,
+        seat: ticket.seat,
+        redeemed: ticket.redeemed,
+      },
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

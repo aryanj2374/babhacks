@@ -1,9 +1,6 @@
 /**
  * MongoDB Routes — Query MongoDB collections directly.
  *
- * These endpoints provide an alternative read/write layer backed by MongoDB,
- * complementing the existing SQLite-backed routes.
- *
  * Endpoints:
  *   GET  /api/mongo/events              — list all events
  *   GET  /api/mongo/tickets/:userAddress — tickets owned by address
@@ -25,17 +22,10 @@ router.get('/events', async (req, res) => {
   try {
     const events = await MongoEvent.find().sort({ date: 1 }).lean();
 
-    // Enrich with ticket counts
     const enriched = await Promise.all(events.map(async (ev) => {
       const totalTickets = await MongoTicket.countDocuments({ eventId: ev._id });
-      const availableTickets = await MongoTicket.countDocuments({
-        eventId: ev._id,
-        $or: [
-          { listedForSale: true },
-          // Tickets still owned by organizer (never sold)
-        ],
-      });
-      return { ...ev, totalTickets, availableTickets };
+      const availableTickets = await MongoTicket.countDocuments({ eventId: ev._id, listedForSale: true });
+      return { ...ev, id: ev._id.toString(), totalTickets, availableTickets };
     }));
 
     logger.info('MONGO', `GET /events → ${enriched.length} events`);
@@ -71,7 +61,7 @@ router.post('/event', async (req, res) => {
     }
 
     const event = await MongoEvent.create({
-      eventName,
+      name: eventName,
       organizerAddress,
       date: date || '',
       venue: venue || '',
@@ -133,7 +123,7 @@ router.post('/resell', async (req, res) => {
     if (parseFloat(resalePrice) > parseFloat(ticket.maxResalePrice)) {
       return res.status(400).json({
         success: false,
-        error: `Price ${resalePrice} exceeds max resale price ${ticket.maxResalePrice} RLUSD`,
+        error: `Price ${resalePrice} exceeds max resale price ${ticket.maxResalePrice} XRP`,
       });
     }
     if (ticket.resaleCount >= ticket.maxResales) {
@@ -152,7 +142,7 @@ router.post('/resell', async (req, res) => {
     await ticket.save();
 
     logger.mongoSync('Ticket', 'resell', ticket._id);
-    logger.info('MONGO', `POST /resell → tokenId=${tokenId.slice(0, 16)}… price=${resalePrice} RLUSD, resale #${ticket.resaleCount}`);
+    logger.info('MONGO', `POST /resell → tokenId=${tokenId.slice(0, 16)}… price=${resalePrice} XRP, resale #${ticket.resaleCount}`);
     res.json({ success: true, ticket });
   } catch (err) {
     logger.error('MONGO POST /resell', err);

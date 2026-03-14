@@ -6,11 +6,11 @@ const express = require('express');
 const xrpl = require('xrpl');
 const router = express.Router();
 
-const { getDb } = require('../db');
 const { authMiddleware } = require('../auth');
 const { decrypt } = require('../crypto');
 const { getClient } = require('../xrplClient');
 const { refillWallet } = require('../../src/wallet');
+const MongoUser = require('../models/User');
 
 /**
  * GET /api/wallet/balance
@@ -18,16 +18,15 @@ const { refillWallet } = require('../../src/wallet');
  */
 router.get('/balance', authMiddleware, async (req, res) => {
   try {
-    const db = getDb();
-    const wallet = db.prepare('SELECT xrpl_address FROM wallets WHERE user_id = ?').get(req.user.id);
-    if (!wallet) return res.status(404).json({ success: false, error: 'No wallet found' });
+    const user = await MongoUser.findById(req.user.id);
+    if (!user || !user.xrplAddress) return res.status(404).json({ success: false, error: 'No wallet found' });
 
     const client = await getClient();
     let xrpBalance = '0';
     try {
       const accountInfo = await client.request({
         command: 'account_info',
-        account: wallet.xrpl_address,
+        account: user.xrplAddress,
         ledger_index: 'validated',
       });
       xrpBalance = xrpl.dropsToXrp(accountInfo.result.account_data.Balance);
@@ -37,7 +36,7 @@ router.get('/balance', authMiddleware, async (req, res) => {
 
     res.json({
       success: true,
-      address: wallet.xrpl_address,
+      address: user.xrplAddress,
       balances: { xrp: xrpBalance },
     });
   } catch (err) {
@@ -51,20 +50,18 @@ router.get('/balance', authMiddleware, async (req, res) => {
  */
 router.post('/fund-xrp', authMiddleware, async (req, res) => {
   try {
-    const db = getDb();
-    const walletRow = db.prepare('SELECT * FROM wallets WHERE user_id = ?').get(req.user.id);
-    if (!walletRow) return res.status(404).json({ success: false, error: 'No wallet found' });
+    const user = await MongoUser.findById(req.user.id);
+    if (!user || !user.xrplSeed) return res.status(404).json({ success: false, error: 'No wallet found' });
 
     const client = await getClient();
-    const userWallet = xrpl.Wallet.fromSeed(decrypt(walletRow.encrypted_seed));
+    const userWallet = xrpl.Wallet.fromSeed(decrypt(user.xrplSeed));
     await refillWallet(client, userWallet);
 
-    // Fetch updated balance
     let xrpBalance = '0';
     try {
       const accountInfo = await client.request({
         command: 'account_info',
-        account: walletRow.xrpl_address,
+        account: user.xrplAddress,
         ledger_index: 'validated',
       });
       xrpBalance = xrpl.dropsToXrp(accountInfo.result.account_data.Balance);

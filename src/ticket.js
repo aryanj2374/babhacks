@@ -233,14 +233,17 @@ function extractTokenId(result) {
  * @param {string} issuerAddress - RLUSD issuer address for payment
  * @returns {Object} { txHash, tokenId, price }
  */
-async function buyTicket(client, buyerWallet, sellerWallet, tokenId, price) {
+async function buyTicket(client, buyerWallet, sellerWallet, tokenId, price, issuerAddress) {
   // Step 1: Seller creates a sell offer
   const sellOfferTx = {
     TransactionType: 'NFTokenCreateOffer',
     Account: sellerWallet.address,
     NFTokenID: tokenId,
-    // XRP amount must be in drops (1 XRP = 1,000,000 drops)
-    Amount: xrpl.xrpToDrops(price),
+    Amount: {
+      currency: config.RLUSD_CURRENCY,
+      issuer: issuerAddress,
+      value: price,
+    },
     Destination: buyerWallet.address,
     Flags: 1, // tfSellNFToken
   };
@@ -313,7 +316,7 @@ async function buyTicket(client, buyerWallet, sellerWallet, tokenId, price) {
  * @param {Object} ticketMetadata - Original ticket metadata (from NFT URI)
  * @returns {Object} { txHash, tokenId, resalePrice, royaltyPaid }
  */
-async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePrice, ticketMetadata) {
+async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePrice, issuerAddress, ticketMetadata) {
   // ── Anti-Scalping Check 1: Max Resale Price ──
   const maxPrice = parseFloat(ticketMetadata.maxResalePrice);
   const proposedPrice = parseFloat(resalePrice);
