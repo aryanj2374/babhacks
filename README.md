@@ -1,5 +1,5 @@
 # 🎫 XRPL Anti-Scalping Ticketing System
-# Aryan Achuthan, Aryan Jain, Arvind Krishna Sivakumar, Kabilesh Yuvaraj
+Created by: Aryan Jain, Arvind Krishna Sivakumar, Kabilesh Yuvaraj, Aryan Achuthan
 
 A full-stack NFT ticketing platform built on the **XRP Ledger Testnet**. Tickets are minted as XLS-20 NFTs with built-in anti-scalping protections: max resale prices, resale limits, and automatic royalties via XRPL's `TransferFee`.
 
