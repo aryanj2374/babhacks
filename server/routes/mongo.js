@@ -126,23 +126,16 @@ router.post('/resell', async (req, res) => {
         error: `Price ${resalePrice} exceeds max resale price ${ticket.maxResalePrice} XRP`,
       });
     }
-    if (ticket.resaleCount >= ticket.maxResales) {
-      return res.status(400).json({
-        success: false,
-        error: `Ticket has reached maximum resales (${ticket.maxResales})`,
-      });
-    }
 
     const previousOwner = ticket.ownerAddress;
     ticket.ownerAddress = buyerAddress;
     ticket.price = resalePrice;
-    ticket.resaleCount += 1;
     ticket.listedForSale = false;
     ticket.listingPrice = '0';
     await ticket.save();
 
     logger.mongoSync('Ticket', 'resell', ticket._id);
-    logger.info('MONGO', `POST /resell → tokenId=${tokenId.slice(0, 16)}… price=${resalePrice} XRP, resale #${ticket.resaleCount}`);
+    logger.info('MONGO', `POST /resell → tokenId=${tokenId.slice(0, 16)}… owner ${previousOwner.slice(0, 8)}… → ${buyerAddress.slice(0, 8)}… price=${resalePrice} XRP`);
     res.json({ success: true, ticket });
   } catch (err) {
     logger.error('MONGO POST /resell', err);

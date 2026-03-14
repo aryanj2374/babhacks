@@ -12,8 +12,6 @@ const ticketSchema = new mongoose.Schema({
   currentOwnerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   price:          { type: String, default: '0' }, // original or current price
   maxResalePrice: { type: String, default: '0' },
-  maxResales:     { type: Number, default: 3 },
-  resaleCount:    { type: Number, default: 0 },
   eventId:        { type: mongoose.Schema.Types.ObjectId, ref: 'Event' },
   seat:           { type: String, default: '' },
   redeemed:       { type: Boolean, default: false },

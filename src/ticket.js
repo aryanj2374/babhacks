@@ -16,7 +16,6 @@
  * 
  * OpenTix Enforcement:
  *   - Max resale price is encoded in NFT metadata and checked before creating offers
- *   - Resale count limits are tracked in metadata and enforced at application layer
  *   - Royalties are automatically handled by XRPL's TransferFee (up to 50%)
  */
 
@@ -326,16 +325,7 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
     );
   }
 
-  // ── OpenTix Check 2: Resale Count Limit (increment: 0 → maxResales) ──
-  const maxResales = ticketMetadata.maxResales || 0;
-  const currentResales = ticketMetadata.resaleCount || 0;
-  if (maxResales > 0 && currentResales >= maxResales) {
-    throw new Error(
-      `OpenTix: ticket has reached the maximum number of resales (${maxResales})`
-    );
-  }
-
-  // ── OpenTix Check 3: Event Date Validity ──
+  // ── OpenTix Check 2: Event Date Validity ──
   const eventDate = new Date(ticketMetadata.eventDate);
   if (eventDate < new Date()) {
     throw new Error(`Ticket's event has already passed (${ticketMetadata.eventDate})`);
@@ -344,7 +334,7 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
   // Convert XRP → drops string
   const amountDrops = xrpl.xrpToDrops(String(resalePrice));
 
-  console.log(`[XRPL] NFTokenCreateOffer (resell) | tokenId=${tokenId.slice(0, 16)}… | amount=${amountDrops} drops (${resalePrice} XRP) | resale ${currentResales + 1}/${maxResales || '∞'}`);
+  console.log(`[XRPL] NFTokenCreateOffer (resell) | tokenId=${tokenId.slice(0, 16)}… | amount=${amountDrops} drops (${resalePrice} XRP)`);
 
   // Step 1: Seller creates a sell offer priced in XRP drops
   const sellOfferTx = {
@@ -386,7 +376,6 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
     tokenId,
     resalePrice,
     royaltyPaid: royaltyAmount,
-    newResaleCount: currentResales + 1,
   };
 }
 

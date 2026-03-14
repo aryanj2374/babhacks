@@ -1,17 +1,17 @@
 # 🎫 OpenTix — XRPL Ticketing Platform
 Created by: Aryan Achuthan, Aryan Jain, Arvind Krishna Sivakumar, Kabilesh Yuvaraj
 
-A full-stack NFT ticketing platform built on the **XRP Ledger Testnet**. Tickets are minted as XLS-20 NFTs with built-in price caps, resale limits, and automatic royalties via XRPL's `TransferFee`.
+A full-stack NFT ticketing platform built on the **XRP Ledger Testnet**. Tickets are minted as XLS-20 NFTs with built-in price caps and automatic royalties via XRPL's `TransferFee`.
 
 ## Features
 
 - **User Accounts** — Sign up as a Fan or Organizer with email/password
 - **Automatic Wallet Creation** — XRPL Testnet wallet funded on signup
-- **Wallet Management** — View XRP/RLUSD balances, demo RLUSD faucet
+- **Wallet Management** — View XRP balances
 - **Event Creation** — Organizers create events and mint NFT tickets
-- **Ticket Marketplace** — Browse and buy tickets with RLUSD stablecoin
-- **Price Caps** — Max resale price enforcement + resale count limits
-- **Auto Royalties** — 10% royalty auto-paid to organizer on every resale (XRPL protocol-level)
+- **Ticket Marketplace** — Browse and buy tickets with native XRP
+- **Price Caps** — Max resale price enforcement on every resale
+- **Auto Royalties** — Configurable royalty (0–50%) auto-paid to organizer on every resale (XRPL protocol-level)
 - **QR Ticket Verification** — Generate QR codes, verify ownership on-chain
 - **Ticket Redemption** — Organizers mark tickets as redeemed at events
 
@@ -21,7 +21,7 @@ A full-stack NFT ticketing platform built on the **XRP Ledger Testnet**. Tickets
 |-------|-----------|
 | Frontend | React + Vite |
 | Backend | Express.js |
-| Database | SQLite (better-sqlite3) |
+| Database | MongoDB (Mongoose) |
 | Auth | JWT (jsonwebtoken) |
 | Blockchain | XRPL Testnet (xrpl.js) |
 | Crypto | AES-256-CBC (wallet seed encryption) |
@@ -39,10 +39,6 @@ npm run build:client
 # 3. Start the server
 npm run dev
 # → http://localhost:3000
-
-# 4. (Optional) Seed test data
-# Keep the server running, then in another terminal:
-npm run seed
 ```
 
 ### Development Mode (with hot reload)
@@ -56,17 +52,16 @@ cd client && npm run dev
 # → http://localhost:5173
 ```
 
-## Test Accounts
+## Environment Variables
 
-After running `npm run seed`:
+Create a `.env` file in the root:
 
-| Email | Password | Role |
-|-------|----------|------|
-| `organizer@test.com` | `password123` | Organizer |
-| `fan1@test.com` | `password123` | Fan (Alice) |
-| `fan2@test.com` | `password123` | Fan (Bob) |
-
-Each fan account is pre-funded with **1000 RLUSD**. The organizer has a sample event with 3 minted tickets.
+```
+MONGO_URI=mongodb+srv://...
+JWT_SECRET=your-secret
+ENCRYPTION_KEY=your-key
+PORT=3000
+```
 
 ## XRPL Primitives Used
 
@@ -74,10 +69,8 @@ Each fan account is pre-funded with **1000 RLUSD**. The organizer has a sample e
 |-----------|---------|
 | `NFTokenMint` | Mint event tickets as NFTs |
 | `NFTokenCreateOffer` | Create buy/sell offers for tickets |
-| `NFTokenAcceptOffer` | Execute atomic NFT ↔ RLUSD swaps |
+| `NFTokenAcceptOffer` | Execute atomic NFT ↔ XRP swaps |
 | `TransferFee` | Auto-collect royalties on every resale |
-| `TrustSet` | Establish trust lines for RLUSD (IOU) |
-| `Payment` | Transfer RLUSD between accounts |
 | `account_nfts` | Verify ticket ownership on-chain |
 
 ## API Endpoints
@@ -88,8 +81,7 @@ Each fan account is pre-funded with **1000 RLUSD**. The organizer has a sample e
 - `GET /api/auth/me` — Current user profile
 
 ### Wallet
-- `GET /api/wallet/balance` — XRP + RLUSD balances
-- `POST /api/wallet/fund-rlusd` — Demo RLUSD faucet
+- `GET /api/wallet/balance` — XRP balance
 
 ### Events
 - `GET /api/events` — List all events
@@ -114,10 +106,10 @@ Each fan account is pre-funded with **1000 RLUSD**. The organizer has a sample e
 ```
 ├── server.js              # Main Express server
 ├── server/                # Backend modules
-│   ├── db.js              # SQLite schema & connection
 │   ├── auth.js            # JWT middleware
 │   ├── crypto.js          # AES-256 encryption
 │   ├── xrplClient.js      # XRPL connection manager
+│   ├── models/            # Mongoose models (User, Event, Ticket)
 │   └── routes/            # API route handlers
 ├── client/                # React + Vite frontend
 │   └── src/
@@ -125,15 +117,11 @@ Each fan account is pre-funded with **1000 RLUSD**. The organizer has a sample e
 │       ├── components/    # Navbar, shared components
 │       ├── context/       # Auth context (React)
 │       └── lib/           # API helper
-├── src/                   # XRPL integration modules
-│   ├── config.js          # Network & token config
-│   ├── wallet.js          # Wallet creation & RLUSD
-│   ├── ticket.js          # Mint, buy, resell, verify
-│   └── utils.js           # Metadata encoding, helpers
-├── scripts/
-│   └── seed.js            # Test data seeder
-└── data/
-    └── ticketing.db       # SQLite database (auto-created)
+└── src/                   # XRPL integration modules
+    ├── config.js          # Network config
+    ├── wallet.js          # Wallet creation
+    ├── ticket.js          # Mint, buy, resell, verify
+    └── utils.js           # Metadata encoding, helpers
 ```
 
 ## License

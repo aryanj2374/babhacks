@@ -170,7 +170,7 @@ export default function MarketplacePage() {
                     )}
                   </div>
                   <div className="mt-opentix">
-                    Max {t.max_resale_price} RLUSD · {t.max_resales === 0 ? 'Unlimited' : t.resale_count} resales left
+                    Max resale: {t.max_resale_price} XRP
                   </div>
                 </div>
               ))}

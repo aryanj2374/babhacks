@@ -12,7 +12,7 @@ export default function MintPage() {
 
   const [selectedEvent, setSelectedEvent] = useState('');
   const [seats, setSeats] = useState([
-    { seat: 'VIP-A101', originalPrice: '150', maxResalePrice: '200', maxResales: '3' },
+    { seat: 'VIP-A101', originalPrice: '150', maxResalePrice: '200' },
   ]);
   const [minting, setMinting] = useState(false);
 
@@ -50,7 +50,7 @@ export default function MintPage() {
 
   function addSeat() {
     const num = seats.length + 1;
-    setSeats([...seats, { seat: `GA-${String(num).padStart(3, '0')}`, originalPrice: '75', maxResalePrice: '100', maxResales: '2' }]);
+    setSeats([...seats, { seat: `GA-${String(num).padStart(3, '0')}`, originalPrice: '75', maxResalePrice: '100' }]);
   }
 
   function removeSeat(index) {
@@ -232,10 +232,6 @@ export default function MintPage() {
                         <div className="tpc-label">Max Resale</div>
                         <div className="tpc-val">{previewSeat.maxResalePrice || '—'} <span style={{ fontSize: '0.62rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>XRP</span></div>
                       </div>
-                      <div className="tpc-field">
-                        <div className="tpc-label">Resales Left</div>
-                        <div className="tpc-val">{previewSeat.maxResales || '—'} / {previewSeat.maxResales || '—'}</div>
-                      </div>
                     </div>
                     <div className="tpc-tear" />
                     <div className="tpc-footer">
@@ -257,8 +253,8 @@ export default function MintPage() {
               </div>
 
               {/* Seat column headers */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.9fr 0.9fr 0.7fr auto', gap: '7px', padding: '6px 10px', borderBottom: '1px solid var(--border-subtle)' }}>
-                {['Seat', 'Price (XRP)', 'Max Resale', 'Max #', ''].map(h => (
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.9fr 0.9fr auto', gap: '7px', padding: '6px 10px', borderBottom: '1px solid var(--border-subtle)' }}>
+                {['Seat', 'Price (XRP)', 'Max Resale', ''].map(h => (
                   <span key={h} style={{ fontSize: '0.6rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.8px', color: 'var(--text-muted)' }}>{h}</span>
                 ))}
               </div>
@@ -274,9 +270,6 @@ export default function MintPage() {
                     </div>
                     <div className="form-group" style={{ margin: 0 }}>
                       <input type="number" value={seat.maxResalePrice} onChange={e => updateSeat(i, 'maxResalePrice', e.target.value)} style={{ padding: '5px 8px' }} />
-                    </div>
-                    <div className="form-group" style={{ margin: 0 }}>
-                      <input type="number" value={seat.maxResales} onChange={e => updateSeat(i, 'maxResales', e.target.value)} style={{ padding: '5px 8px' }} />
                     </div>
                     {seats.length > 1 && (
                       <button type="button" className="btn-icon-remove" onClick={() => removeSeat(i)}>&times;</button>

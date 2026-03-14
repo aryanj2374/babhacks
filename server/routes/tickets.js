@@ -32,8 +32,7 @@ router.get('/my', authMiddleware, async (req, res) => {
       seat: t.seat,
       original_price: t.price,
       max_resale_price: t.maxResalePrice,
-      max_resales: t.maxResales,
-      resale_count: t.resaleCount,
+
       redeemed: t.redeemed,
       listed_for_sale: t.listedForSale,
       listing_price: t.listingPrice,
@@ -52,7 +51,7 @@ router.get('/my', authMiddleware, async (req, res) => {
 /**
  * POST /api/tickets/mint
  * Mint NFT tickets for an event (organizer only).
- * Body: { eventId, seats: [{ seat, originalPrice, maxResalePrice, maxResales }] }
+ * Body: { eventId, seats: [{ seat, originalPrice, maxResalePrice }] }
  * Royalty is read from the event's royaltyPercent field (set at event creation).
  */
 router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
@@ -86,7 +85,6 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
         originalPrice: seatInfo.originalPrice || '10',
         maxResalePrice: seatInfo.maxResalePrice || '15',
         eventDate: event.date,
-        maxResales: parseInt(seatInfo.maxResales) || 3,
       };
 
       const result = await mintTicket(client, organizerWallet, metadata, royaltyBps);
@@ -98,8 +96,6 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
         currentOwnerId: req.user.id,
         price: metadata.originalPrice,
         maxResalePrice: metadata.maxResalePrice,
-        maxResales: metadata.maxResales,
-        resaleCount: 0,
         eventId: event._id,
         seat: metadata.seat,
         redeemed: false,
@@ -166,18 +162,9 @@ router.post('/buy', authMiddleware, async (req, res) => {
     const isResale = seller.role !== 'organizer';
 
     if (isResale) {
-      if (ticket.maxResales > 0 && ticket.resaleCount >= ticket.maxResales) {
-        return res.status(400).json({
-          success: false,
-          error: `This ticket has reached the maximum resales (${ticket.maxResales})`,
-        });
-      }
-
       const resalePrice = ticket.listingPrice || ticket.price;
       const metadata = {
         maxResalePrice: ticket.maxResalePrice,
-        maxResales: ticket.maxResales,
-        resaleCount: ticket.resaleCount,
         eventDate: ticket.eventId?.date,
       };
 
@@ -185,7 +172,6 @@ router.post('/buy', authMiddleware, async (req, res) => {
 
       ticket.ownerAddress = buyerWallet.address;
       ticket.currentOwnerId = req.user.id;
-      ticket.resaleCount = result.newResaleCount;
       ticket.price = resalePrice;
       ticket.listedForSale = false;
       ticket.listingPrice = '0';
@@ -259,8 +245,6 @@ router.post('/resell', authMiddleware, async (req, res) => {
 
     const metadata = {
       maxResalePrice: ticket.maxResalePrice,
-      maxResales: ticket.maxResales,
-      resaleCount: ticket.resaleCount,
       eventDate: ticket.eventId?.date,
     };
 
@@ -268,7 +252,6 @@ router.post('/resell', authMiddleware, async (req, res) => {
 
     ticket.ownerAddress = buyerWallet.address;
     ticket.currentOwnerId = buyerId;
-    ticket.resaleCount = result.newResaleCount;
     ticket.price = resalePrice;
     ticket.listedForSale = false;
     ticket.listingPrice = '0';
@@ -312,13 +295,6 @@ router.post('/list-for-sale', authMiddleware, async (req, res) => {
       });
     }
 
-    if (ticket.maxResales > 0 && ticket.resaleCount >= ticket.maxResales) {
-      return res.status(400).json({
-        success: false,
-        error: `This ticket has reached the maximum resales (${ticket.maxResales})`,
-      });
-    }
-
     ticket.listedForSale = true;
     ticket.listingPrice = resalePrice;
     await ticket.save();
@@ -346,8 +322,7 @@ router.get('/marketplace', async (req, res) => {
       seat: t.seat,
       original_price: t.price,
       max_resale_price: t.maxResalePrice,
-      max_resales: t.maxResales,
-      resale_count: t.resaleCount,
+
       redeemed: t.redeemed,
       event_name: t.eventId?.name || '',
       event_date: t.eventId?.date || '',
