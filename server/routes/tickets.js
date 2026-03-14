@@ -15,6 +15,9 @@ const { decrypt } = require('../crypto');
 const { getClient } = require('../xrplClient');
 const { mintTicket, buyTicket, resellTicket } = require('../../src/ticket');
 const { sleep } = require('../../src/utils');
+const MongoTicket = require('../models/Ticket');
+const MongoEvent  = require('../models/Event');
+const logger      = require('../logger');
 
 /**
  * GET /api/tickets/my
@@ -96,9 +99,46 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
       mintedTickets.push({ ticketId, tokenId: result.tokenId, seat: metadata.seat, txHash: result.txHash });
     }
 
+    // ── Sync to MongoDB ──
+    try {
+      const walletRow2 = db.prepare('SELECT xrpl_address FROM wallets WHERE user_id = ?').get(req.user.id);
+      const mongoEvent = await MongoEvent.findOne({ sqliteId: eventId });
+      for (const mt of mintedTickets) {
+        await MongoTicket.create({
+          tokenId: mt.tokenId,
+          ownerAddress: walletRow2?.xrpl_address || '',
+          price: seats.find(s => s.seat === mt.seat)?.originalPrice || '10',
+          maxResalePrice: seats.find(s => s.seat === mt.seat)?.maxResalePrice || '15',
+          maxResales: parseInt(seats.find(s => s.seat === mt.seat)?.maxResales) || 3,
+          resaleCount: 0,
+          eventId: mongoEvent?._id || null,
+          seat: mt.seat,
+          redeemed: false,
+          txHash: mt.txHash,
+          sqliteId: mt.ticketId,
+        });
+        if (mongoEvent) {
+          mongoEvent.ticketIds.push(mt.tokenId);
+        }
+        logger.mongoSync('Ticket', 'create', mt.tokenId.slice(0, 16));
+      }
+      if (mongoEvent) await mongoEvent.save();
+    } catch (mongoErr) {
+      logger.error('MONGO_SYNC mint', mongoErr);
+    }
+
+    // ── Debug log ──
+    logger.mint({
+      eventId,
+      eventName: event.name,
+      ticketIds: mintedTickets.map(t => t.tokenId),
+      organizerAddress: organizerWallet.address,
+      txHash: mintedTickets[0]?.txHash || '',
+    });
+
     res.json({ success: true, tickets: mintedTickets });
   } catch (err) {
-    console.error('Mint error:', err);
+    logger.error('TICKETS mint', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -136,9 +176,32 @@ router.post('/buy', authMiddleware, async (req, res) => {
       'INSERT INTO transactions (id, type, ticket_id, from_user_id, to_user_id, price, tx_hash) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(uuidv4(), 'BUY', ticketId, ticket.current_owner_id, req.user.id, ticket.original_price, result.txHash);
 
-    res.json({ success: true, message: `Ticket purchased for ${ticket.original_price} XRP`, txHash: result.txHash });
+    // ── Sync to MongoDB ──
+    try {
+      await MongoTicket.findOneAndUpdate(
+        { tokenId: ticket.token_id },
+        { ownerAddress: buyerWallet.address, listedForSale: false, listingPrice: '0' }
+      );
+      logger.mongoSync('Ticket', 'buy', ticket.token_id.slice(0, 16));
+    } catch (mongoErr) {
+      logger.error('MONGO_SYNC buy', mongoErr);
+    }
+
+    // ── Debug log ──
+    logger.buy({
+      buyerAddress: buyerWallet.address,
+      ticketId: ticket.token_id,
+      amount: ticket.original_price,
+      txHash: result.txHash,
+    });
+
+    res.json({
+      success: true,
+      message: `Ticket purchased for ${ticket.original_price} XRP`,
+      txHash: result.txHash,
+    });
   } catch (err) {
-    console.error('Buy error:', err);
+    logger.error('TICKETS buy', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -181,9 +244,39 @@ router.post('/resell', authMiddleware, async (req, res) => {
       'INSERT INTO transactions (id, type, ticket_id, from_user_id, to_user_id, price, tx_hash) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(uuidv4(), 'RESELL', ticketId, req.user.id, buyerId, resalePrice, result.txHash);
 
-    res.json({ success: true, message: `Ticket resold for ${resalePrice} XRP`, txHash: result.txHash });
+    // ── Sync to MongoDB ──
+    try {
+      await MongoTicket.findOneAndUpdate(
+        { tokenId: ticket.token_id },
+        {
+          ownerAddress: buyerWallet.address,
+          price: resalePrice,
+          resaleCount: result.newResaleCount,
+          listedForSale: false,
+          listingPrice: '0',
+        }
+      );
+      logger.mongoSync('Ticket', 'resell', ticket.token_id.slice(0, 16));
+    } catch (mongoErr) {
+      logger.error('MONGO_SYNC resell', mongoErr);
+    }
+
+    // ── Debug log ──
+    logger.resell({
+      sellerAddress: sellerWallet.address,
+      ticketId: ticket.token_id,
+      resalePrice,
+      txHash: result.txHash,
+      royaltyPaid: result.royaltyPaid,
+    });
+
+    res.json({
+      success: true,
+      message: `Ticket resold for ${resalePrice} XRP`,
+      txHash: result.txHash,
+    });
   } catch (err) {
-    console.error('Resell error:', err);
+    logger.error('TICKETS resell', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -219,6 +312,19 @@ router.post('/list-for-sale', authMiddleware, async (req, res) => {
     metadata.listingPrice = resalePrice;
 
     db.prepare('UPDATE tickets SET metadata_json = ? WHERE id = ?').run(JSON.stringify(metadata), ticketId);
+
+    // ── Sync to MongoDB ──
+    try {
+      await MongoTicket.findOneAndUpdate(
+        { sqliteId: ticketId },
+        { listedForSale: true, listingPrice: resalePrice }
+      );
+      logger.mongoSync('Ticket', 'list-for-sale', ticketId.slice(0, 16));
+    } catch (mongoErr) {
+      logger.error('MONGO_SYNC list-for-sale', mongoErr);
+    }
+
+    logger.info('TICKETS', `Listed ticket ${ticketId.slice(0, 8)}… for ${resalePrice} RLUSD`);
     res.json({ success: true, message: 'Ticket listed for sale' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
