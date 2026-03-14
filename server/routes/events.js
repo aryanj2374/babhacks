@@ -31,8 +31,9 @@ router.get('/', async (req, res) => {
         date: ev.date,
         venue: ev.venue,
         organizer_name: ev.organizerId?.displayName || '',
+        royalty_percent: ev.royaltyPercent ?? 10,
         total_tickets,
-        available_tickets: total_tickets, // all tickets are listed for sale initially
+        available_tickets: total_tickets,
       };
     }));
 
@@ -67,6 +68,7 @@ router.get('/:id', async (req, res) => {
       date: event.date,
       venue: event.venue,
       organizer_name: event.organizerId?.displayName || '',
+      royalty_percent: event.royaltyPercent ?? 10,
     };
 
     const ticketsOut = tickets.map(t => ({
@@ -126,6 +128,7 @@ router.post('/', authMiddleware, requireOrganizer, async (req, res) => {
         description: event.description,
         date: event.date,
         venue: event.venue,
+        royalty_percent: event.royaltyPercent,
       },
     });
   } catch (err) {

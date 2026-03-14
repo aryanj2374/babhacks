@@ -113,8 +113,8 @@ async function submitWithBuffer(client, tx, wallet) {
  *   @param {string} metadata.eventId - Unique event identifier
  *   @param {string} metadata.eventName - Human-readable event name
  *   @param {string} metadata.seat - Seat identifier (e.g., "A-101")
- *   @param {string} metadata.originalPrice - Face value in RLUSD
- *   @param {string} metadata.maxResalePrice - Maximum allowed resale price
+ *   @param {string} metadata.originalPrice - Face value in XRP
+ *   @param {string} metadata.maxResalePrice - Maximum allowed resale price in XRP
  *   @param {string} metadata.eventDate - Event date (ISO format)
  *   @param {number} metadata.maxResales - Maximum number of resales allowed (0 = unlimited)
  *   @param {number} [metadata.resaleCount=0] - Current resale count (starts at 0)
@@ -212,40 +212,32 @@ function extractTokenId(result) {
 // ═══════════════════════════════════════════════════════════════════
 
 /**
- * Buy a ticket from the organizer (primary sale) or from a fan (secondary sale).
- * 
- * XRPL Primitives used:
- *   - NFTokenCreateOffer: Seller creates a sell offer for the NFT
- *   - NFTokenCreateOffer: Buyer creates a buy offer (optional, for brokered mode)
- *   - NFTokenAcceptOffer: Accepts the sell offer, atomically transferring NFT + payment
- * 
- * Flow:
- *   1. Seller creates a sell offer specifying the price in RLUSD
- *   2. Buyer accepts the sell offer
- *   3. XRPL atomically: transfers NFT to buyer, transfers RLUSD to seller
- *   4. If TransferFee is set, XRPL auto-deducts royalty to the original minter
- * 
- * @param {Client} client - Connected xrpl.Client
- * @param {Wallet} buyerWallet - The fan's wallet
- * @param {Wallet} sellerWallet - The organizer's or current owner's wallet
- * @param {string} tokenId - NFTokenID of the ticket to buy
- * @param {string} price - Price in RLUSD
- * @param {string} issuerAddress - RLUSD issuer address for payment
- * @returns {Object} { txHash, tokenId, price }
+ * Buy a ticket (primary sale: organizer → fan).
+ *
+ * Amount is native XRP in drops (1 XRP = 1,000,000 drops).
+ * xrpl.xrpToDrops("50") → "50000000"
+ *
+ * @param {Client} client
+ * @param {Wallet} buyerWallet
+ * @param {Wallet} sellerWallet
+ * @param {string} tokenId - NFTokenID
+ * @param {string} price   - Price in XRP (e.g. "50")
+ * @returns {Object} { txHash, tokenId, price, sellOfferId }
  */
-async function buyTicket(client, buyerWallet, sellerWallet, tokenId, price, issuerAddress) {
-  // Step 1: Seller creates a sell offer
+async function buyTicket(client, buyerWallet, sellerWallet, tokenId, price) {
+  // Convert XRP → drops (string). XRPL requires Amount as drops string, NOT raw XRP.
+  const amountDrops = xrpl.xrpToDrops(String(price));
+
+  console.log(`[XRPL] NFTokenCreateOffer (buy) | tokenId=${tokenId.slice(0, 16)}… | amount=${amountDrops} drops (${price} XRP) | seller=${sellerWallet.address.slice(0, 12)}… | buyer=${buyerWallet.address.slice(0, 12)}…`);
+
+  // Step 1: Seller creates a sell offer priced in XRP drops
   const sellOfferTx = {
     TransactionType: 'NFTokenCreateOffer',
     Account: sellerWallet.address,
     NFTokenID: tokenId,
-    Amount: {
-      currency: config.RLUSD_CURRENCY,
-      issuer: issuerAddress,
-      value: price,
-    },
+    Amount: amountDrops,       // ← drops string, e.g. "50000000"
     Destination: buyerWallet.address,
-    Flags: 1, // tfSellNFToken
+    Flags: 1,                  // tfSellNFToken
   };
 
   const sellResult = await submitWithBuffer(client, sellOfferTx, sellerWallet);
@@ -253,15 +245,10 @@ async function buyTicket(client, buyerWallet, sellerWallet, tokenId, price, issu
     throw new Error(`Sell offer failed: ${sellResult.result.meta.TransactionResult}`);
   }
 
-  // Extract the offer ID from the transaction metadata
   const sellOfferId = extractOfferId(sellResult);
-  console.log(`  📋 Sell offer created: ${sellOfferId}`);
+  console.log(`[XRPL] Sell offer created: ${sellOfferId}`);
 
-  // Step 2: Buyer accepts the sell offer
-  // NFTokenAcceptOffer atomically executes the trade:
-  //   - NFT moves from seller → buyer
-  //   - RLUSD moves from buyer → seller (minus royalty)
-  //   - Royalty (TransferFee) automatically goes to original minter
+  // Step 2: Buyer accepts — XRPL atomically transfers NFT + XRP payment + royalty
   const acceptTx = {
     TransactionType: 'NFTokenAcceptOffer',
     Account: buyerWallet.address,
@@ -273,7 +260,7 @@ async function buyTicket(client, buyerWallet, sellerWallet, tokenId, price, issu
     throw new Error(`Accept offer failed: ${acceptResult.result.meta.TransactionResult}`);
   }
 
-  console.log(`  Ticket purchased! NFT ${tokenId.slice(0, 16)}... transferred to ${buyerWallet.address}`);
+  console.log(`[XRPL] Ticket purchased! NFT ${tokenId.slice(0, 16)}… → ${buyerWallet.address.slice(0, 12)}…`);
 
   return {
     txHash: acceptResult.result.hash,
@@ -316,7 +303,20 @@ async function buyTicket(client, buyerWallet, sellerWallet, tokenId, price, issu
  * @param {Object} ticketMetadata - Original ticket metadata (from NFT URI)
  * @returns {Object} { txHash, tokenId, resalePrice, royaltyPaid }
  */
-async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePrice, issuerAddress, ticketMetadata) {
+/**
+ * Resell a ticket on the secondary market with OpenTix enforcement.
+ *
+ * Amount is native XRP in drops — same rules as buyTicket.
+ *
+ * @param {Client} client
+ * @param {Wallet} sellerWallet
+ * @param {Wallet} buyerWallet
+ * @param {string} tokenId       - NFTokenID
+ * @param {string} resalePrice   - Price in XRP (e.g. "45")
+ * @param {Object} ticketMetadata - { maxResalePrice, maxResales, resaleCount, eventDate }
+ * @returns {Object} { txHash, tokenId, resalePrice, royaltyPaid, newResaleCount }
+ */
+async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePrice, ticketMetadata) {
   // ── OpenTix Check 1: Max Resale Price ──
   const maxPrice = parseFloat(ticketMetadata.maxResalePrice);
   const proposedPrice = parseFloat(resalePrice);
@@ -326,13 +326,12 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
     );
   }
 
-  // ── OpenTix Check 2: Resale Count Limit (countdown: remaining → 0) ──
+  // ── OpenTix Check 2: Resale Count Limit (increment: 0 → maxResales) ──
   const maxResales = ticketMetadata.maxResales || 0;
-  // resalesRemaining counts down from maxResales to 0; 0 means no resales left
-  const resalesRemaining = ticketMetadata.resalesRemaining ?? ticketMetadata.maxResales ?? 0;
-  if (maxResales > 0 && resalesRemaining <= 0) {
+  const currentResales = ticketMetadata.resaleCount || 0;
+  if (maxResales > 0 && currentResales >= maxResales) {
     throw new Error(
-      `🚫 OPENTIX: This ticket has no resales remaining (0 / ${maxResales})`
+      `OpenTix: ticket has reached the maximum number of resales (${maxResales})`
     );
   }
 
@@ -342,25 +341,19 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
     throw new Error(`Ticket's event has already passed (${ticketMetadata.eventDate})`);
   }
 
-  console.log(`  🔍 OpenTix checks passed:`);
-  console.log(`     Price: ${resalePrice}/${ticketMetadata.maxResalePrice} RLUSD ✓`);
-  console.log(`     Resales remaining: ${resalesRemaining - 1}/${maxResales || '∞'} ✓`);
+  // Convert XRP → drops string
+  const amountDrops = xrpl.xrpToDrops(String(resalePrice));
 
-  // ── Execute the resale using XRPL NFT offer primitives ──
-  // Same flow as buyTicket, but with open-tix validation done above
+  console.log(`[XRPL] NFTokenCreateOffer (resell) | tokenId=${tokenId.slice(0, 16)}… | amount=${amountDrops} drops (${resalePrice} XRP) | resale ${currentResales + 1}/${maxResales || '∞'}`);
 
-  // Step 1: Create sell offer
+  // Step 1: Seller creates a sell offer priced in XRP drops
   const sellOfferTx = {
     TransactionType: 'NFTokenCreateOffer',
     Account: sellerWallet.address,
     NFTokenID: tokenId,
-    Amount: {
-      currency: config.RLUSD_CURRENCY,
-      issuer: issuerAddress,
-      value: resalePrice,
-    },
+    Amount: amountDrops,       // ← drops string, e.g. "45000000"
     Destination: buyerWallet.address,
-    Flags: 1, // tfSellNFToken
+    Flags: 1,                  // tfSellNFToken
   };
 
   const sellResult = await submitWithBuffer(client, sellOfferTx, sellerWallet);
@@ -369,13 +362,9 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
   }
 
   const sellOfferId = extractOfferId(sellResult);
-  console.log(`  📋 Resale sell offer created: ${sellOfferId}`);
+  console.log(`[XRPL] Resale sell offer created: ${sellOfferId}`);
 
-  // Step 2: Buyer accepts the offer
-  // XRPL automatically handles:
-  //   - NFT transfer: seller → buyer
-  //   - Payment: buyer → seller (minus TransferFee royalty)
-  //   - Royalty: TransferFee % → original minter (organizer)
+  // Step 2: Buyer accepts — XRPL atomically transfers NFT + XRP + royalty to minter
   const acceptTx = {
     TransactionType: 'NFTokenAcceptOffer',
     Account: buyerWallet.address,
@@ -387,20 +376,17 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
     throw new Error(`Resale accept failed: ${acceptResult.result.meta.TransactionResult}`);
   }
 
-  // Calculate royalty that was automatically paid
-  // XRPL scale: 50000=50%, 10000=10%, 1000=1% (1 unit = 0.001%)
+  // Royalty is enforced by XRPL TransferFee — calculated here for display only
   const effectiveBps = ticketMetadata.royaltyBps ?? config.DEFAULT_ROYALTY_BPS;
-  const royaltyPercent = effectiveBps / 1000;
-  const royaltyAmount = (proposedPrice * effectiveBps / 100000).toFixed(2);
-  console.log(`  ✅ Ticket resold! NFT transferred to ${buyerWallet.address}`);
-  console.log(`     💰 Royalty auto-paid to organizer: ${royaltyAmount} RLUSD (${royaltyPercent}%)`);
+  const royaltyAmount = (proposedPrice * effectiveBps / 100000).toFixed(4);
+  console.log(`[XRPL] Ticket resold! NFT ${tokenId.slice(0, 16)}… → ${buyerWallet.address.slice(0, 12)}… | royalty ~${royaltyAmount} XRP`);
 
   return {
     txHash: acceptResult.result.hash,
     tokenId,
     resalePrice,
     royaltyPaid: royaltyAmount,
-    newResaleCount: maxResales > 0 ? resalesRemaining - 1 : 0,
+    newResaleCount: currentResales + 1,
   };
 }
 
@@ -467,7 +453,7 @@ async function verifyTicket(client, walletAddress, tokenId) {
   console.log(`  🔍 Verification: ${result.message}`);
   if (metadata.eventName) {
     console.log(`     Event: ${metadata.eventName} | Seat: ${metadata.seat}`);
-    console.log(`     Original Price: ${metadata.originalPrice} RLUSD`);
+    console.log(`     Original Price: ${metadata.originalPrice} XRP`);
   }
 
   return result;
