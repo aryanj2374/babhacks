@@ -5,10 +5,11 @@
 const express = require('express');
 const router = express.Router();
 
-const { getDb } = require('../db');
 const { authMiddleware, requireOrganizer } = require('../auth');
 const { getClient } = require('../xrplClient');
 const { verifyTicket } = require('../../src/ticket');
+const MongoTicket = require('../models/Ticket');
+const MongoUser = require('../models/User');
 
 /**
  * GET /api/verify/:ticketId
@@ -16,15 +17,9 @@ const { verifyTicket } = require('../../src/ticket');
  */
 router.get('/:ticketId', async (req, res) => {
   try {
-    const db = getDb();
-    const ticket = db.prepare(`
-      SELECT t.*, e.name as event_name, e.date as event_date, e.venue as event_venue,
-             u.display_name as owner_name
-      FROM tickets t
-      JOIN events e ON t.event_id = e.id
-      LEFT JOIN users u ON t.current_owner_id = u.id
-      WHERE t.id = ?
-    `).get(req.params.ticketId);
+    const ticket = await MongoTicket.findById(req.params.ticketId)
+      .populate('eventId')
+      .populate('currentOwnerId', 'displayName xrplAddress');
 
     if (!ticket) {
       return res.status(404).json({ success: false, error: 'Ticket not found' });
@@ -34,9 +29,9 @@ router.get('/:ticketId', async (req, res) => {
     let onChainValid = false;
     try {
       const client = await getClient();
-      const wallet = db.prepare('SELECT xrpl_address FROM wallets WHERE user_id = ?').get(ticket.current_owner_id);
-      if (wallet && ticket.token_id) {
-        const result = await verifyTicket(client, wallet.xrpl_address, ticket.token_id);
+      const ownerAddress = ticket.currentOwnerId?.xrplAddress || ticket.ownerAddress;
+      if (ownerAddress && ticket.tokenId) {
+        const result = await verifyTicket(client, ownerAddress, ticket.tokenId);
         onChainValid = result.owned && result.valid;
       }
     } catch (err) {
@@ -46,12 +41,12 @@ router.get('/:ticketId', async (req, res) => {
     res.json({
       success: true,
       verification: {
-        ticketId: ticket.id,
-        eventName: ticket.event_name,
-        eventDate: ticket.event_date,
-        venue: ticket.event_venue,
+        ticketId: ticket._id.toString(),
+        eventName: ticket.eventId?.name || '',
+        eventDate: ticket.eventId?.date || '',
+        venue: ticket.eventId?.venue || '',
         seat: ticket.seat,
-        ownerName: ticket.owner_name,
+        ownerName: ticket.currentOwnerId?.displayName || '',
         redeemed: !!ticket.redeemed,
         onChainValid,
         valid: !ticket.redeemed && onChainValid,
@@ -73,24 +68,20 @@ router.get('/:ticketId', async (req, res) => {
  */
 router.post('/:ticketId/redeem', authMiddleware, requireOrganizer, async (req, res) => {
   try {
-    const db = getDb();
-    const ticket = db.prepare(`
-      SELECT t.*, e.organizer_id FROM tickets t
-      JOIN events e ON t.event_id = e.id
-      WHERE t.id = ?
-    `).get(req.params.ticketId);
+    const ticket = await MongoTicket.findById(req.params.ticketId).populate('eventId');
 
     if (!ticket) {
       return res.status(404).json({ success: false, error: 'Ticket not found' });
     }
-    if (ticket.organizer_id !== req.user.id) {
+    if (ticket.eventId?.organizerId?.toString() !== req.user.id) {
       return res.status(403).json({ success: false, error: 'You are not the organizer of this event' });
     }
     if (ticket.redeemed) {
       return res.status(400).json({ success: false, error: 'Ticket already redeemed' });
     }
 
-    db.prepare('UPDATE tickets SET redeemed = 1 WHERE id = ?').run(req.params.ticketId);
+    ticket.redeemed = true;
+    await ticket.save();
 
     res.json({ success: true, message: 'Ticket redeemed successfully' });
   } catch (err) {

@@ -3,13 +3,12 @@
  */
 
 const express = require('express');
-const crypto = require('crypto');
-const uuidv4 = () => crypto.randomUUID();
 const router = express.Router();
 
-const { getDb } = require('../db');
 const { authMiddleware, requireOrganizer } = require('../auth');
 const MongoEvent = require('../models/Event');
+const MongoTicket = require('../models/Ticket');
+const MongoUser = require('../models/User');
 const logger = require('../logger');
 
 /**
@@ -18,17 +17,26 @@ const logger = require('../logger');
  */
 router.get('/', async (req, res) => {
   try {
-    const db = getDb();
-    const events = db.prepare(`
-      SELECT e.*, u.display_name as organizer_name,
-        (SELECT COUNT(*) FROM tickets t WHERE t.event_id = e.id AND t.current_owner_id IS NULL) as available_tickets,
-        (SELECT COUNT(*) FROM tickets t WHERE t.event_id = e.id) as total_tickets
-      FROM events e
-      JOIN users u ON e.organizer_id = u.id
-      ORDER BY e.date ASC
-    `).all();
+    const events = await MongoEvent.find()
+      .populate('organizerId', 'displayName')
+      .sort({ date: 1 })
+      .lean();
 
-    res.json({ success: true, events });
+    const enriched = await Promise.all(events.map(async (ev) => {
+      const total_tickets = await MongoTicket.countDocuments({ eventId: ev._id });
+      return {
+        id: ev._id.toString(),
+        name: ev.name,
+        description: ev.description,
+        date: ev.date,
+        venue: ev.venue,
+        organizer_name: ev.organizerId?.displayName || '',
+        total_tickets,
+        available_tickets: total_tickets, // all tickets are listed for sale initially
+      };
+    }));
+
+    res.json({ success: true, events: enriched });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -40,26 +48,39 @@ router.get('/', async (req, res) => {
  */
 router.get('/:id', async (req, res) => {
   try {
-    const db = getDb();
-    const event = db.prepare(`
-      SELECT e.*, u.display_name as organizer_name
-      FROM events e
-      JOIN users u ON e.organizer_id = u.id
-      WHERE e.id = ?
-    `).get(req.params.id);
+    const event = await MongoEvent.findById(req.params.id)
+      .populate('organizerId', 'displayName')
+      .lean();
 
     if (!event) {
       return res.status(404).json({ success: false, error: 'Event not found' });
     }
 
-    const tickets = db.prepare(`
-      SELECT t.*, u.display_name as owner_name
-      FROM tickets t
-      LEFT JOIN users u ON t.current_owner_id = u.id
-      WHERE t.event_id = ?
-    `).all(req.params.id);
+    const tickets = await MongoTicket.find({ eventId: req.params.id })
+      .populate('currentOwnerId', 'displayName')
+      .lean();
 
-    res.json({ success: true, event, tickets });
+    const eventOut = {
+      id: event._id.toString(),
+      name: event.name,
+      description: event.description,
+      date: event.date,
+      venue: event.venue,
+      organizer_name: event.organizerId?.displayName || '',
+    };
+
+    const ticketsOut = tickets.map(t => ({
+      id: t._id.toString(),
+      token_id: t.tokenId,
+      seat: t.seat,
+      original_price: t.price,
+      max_resale_price: t.maxResalePrice,
+      resale_count: t.resaleCount,
+      redeemed: t.redeemed,
+      owner_name: t.currentOwnerId?.displayName || '',
+    }));
+
+    res.json({ success: true, event: eventOut, tickets: ticketsOut });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -78,34 +99,30 @@ router.post('/', authMiddleware, requireOrganizer, async (req, res) => {
       return res.status(400).json({ success: false, error: 'Name and date are required' });
     }
 
-    const db = getDb();
-    const eventId = uuidv4();
+    const user = await MongoUser.findById(req.user.id);
+    if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
-    db.prepare(
-      'INSERT INTO events (id, organizer_id, name, description, date, venue) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(eventId, req.user.id, name, description || '', date, venue || '');
+    const event = await MongoEvent.create({
+      name,
+      description: description || '',
+      date,
+      venue: venue || '',
+      organizerAddress: user.xrplAddress,
+      organizerId: req.user.id,
+      ticketIds: [],
+    });
 
-    const event = db.prepare('SELECT * FROM events WHERE id = ?').get(eventId);
-
-    // ── Sync to MongoDB ──
-    try {
-      const walletRow = db.prepare('SELECT xrpl_address FROM wallets WHERE user_id = ?').get(req.user.id);
-      await MongoEvent.create({
-        eventName: name,
-        organizerAddress: walletRow?.xrpl_address || '',
-        date: date || '',
-        venue: venue || '',
-        description: description || '',
-        ticketIds: [],
-        sqliteId: eventId,
-      });
-      logger.mongoSync('Event', 'create', eventId);
-    } catch (mongoErr) {
-      logger.error('MONGO_SYNC event', mongoErr);
-    }
-
-    logger.info('EVENTS', `Created event "${name}" (id=${eventId.slice(0, 8)}…)`);
-    res.json({ success: true, event });
+    logger.info('EVENTS', `Created event "${name}" (id=${event._id.toString().slice(0, 8)}…)`);
+    res.json({
+      success: true,
+      event: {
+        id: event._id.toString(),
+        name: event.name,
+        description: event.description,
+        date: event.date,
+        venue: event.venue,
+      },
+    });
   } catch (err) {
     logger.error('EVENTS create', err);
     res.status(500).json({ success: false, error: err.message });

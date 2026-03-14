@@ -62,7 +62,7 @@ const logger = {
    */
   buy(data) {
     const { buyerAddress, ticketId, amount, txHash } = data;
-    const msg = `BUY buyer=${buyerAddress?.slice(0, 12)}… ticket=${ticketId?.slice(0, 16)}… amount=${amount} RLUSD tx=${txHash?.slice(0, 16)}…`;
+    const msg = `BUY buyer=${buyerAddress?.slice(0, 12)}… ticket=${ticketId?.slice(0, 16)}… amount=${amount} XRP tx=${txHash?.slice(0, 16)}…`;
     console.log(`${COLORS.blue}${COLORS.bold}🛒 [BUY]${COLORS.reset} ${COLORS.blue}${msg}${COLORS.reset}`);
     writeToFile(`[BUY] ${formatKV(data)}`);
   },
@@ -72,7 +72,7 @@ const logger = {
    */
   resell(data) {
     const { sellerAddress, ticketId, resalePrice, txHash, royaltyPaid } = data;
-    const msg = `RESELL seller=${sellerAddress?.slice(0, 12)}… ticket=${ticketId?.slice(0, 16)}… price=${resalePrice} RLUSD royalty=${royaltyPaid || 'N/A'} tx=${txHash?.slice(0, 16)}…`;
+    const msg = `RESELL seller=${sellerAddress?.slice(0, 12)}… ticket=${ticketId?.slice(0, 16)}… price=${resalePrice} XRP royalty=${royaltyPaid || 'N/A'} tx=${txHash?.slice(0, 16)}…`;
     console.log(`${COLORS.yellow}${COLORS.bold}🔄 [RESELL]${COLORS.reset} ${COLORS.yellow}${msg}${COLORS.reset}`);
     writeToFile(`[RESELL] ${formatKV(data)}`);
   },
