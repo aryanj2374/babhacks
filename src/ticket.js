@@ -276,34 +276,6 @@ async function buyTicket(client, buyerWallet, sellerWallet, tokenId, price) {
 /**
  * Resell a ticket on the secondary market with OpenTix enforcement.
  *
- * OpenTix Checks (Application Layer):
- *   1. Resale price must not exceed maxResalePrice from ticket metadata
- *   2. Resale count must not exceed maxResales from ticket metadata
- *   3. Event date must not have passed
- *
- * XRPL Primitives (Protocol Layer):
- *   - TransferFee: Royalty automatically deducted and sent to organizer (minter)
- *   - NFTokenCreateOffer: Creates the sell offer at the validated price
- *   - NFTokenAcceptOffer: Buyer accepts, completing the atomic swap
- *
- * The combination of application-layer price caps + protocol-layer royalties
- * creates a robust open-tix system:
- *   - Scalpers cannot list above maxResalePrice (app enforces)
- *   - Organizers always get their royalty cut (XRPL enforces)
- *   - Resale limits prevent ticket churning (app enforces)
- * 
- * @param {Client} client - Connected xrpl.Client
- * @param {Wallet} sellerWallet - Current ticket owner's wallet
- * @param {Wallet} buyerWallet - The new buyer's wallet
- * @param {string} tokenId - NFTokenID of the ticket
- * @param {string} resalePrice - Proposed resale price in RLUSD
- * @param {string} issuerAddress - RLUSD issuer address
- * @param {Object} ticketMetadata - Original ticket metadata (from NFT URI)
- * @returns {Object} { txHash, tokenId, resalePrice, royaltyPaid }
- */
-/**
- * Resell a ticket on the secondary market with OpenTix enforcement.
- *
  * Royalty model (application-layer, profit-based):
  *   profit       = max(0, resalePrice - sellerPaidPrice)
  *   royalty      = profit * (royaltyBps / 100000)
@@ -380,8 +352,12 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
 
   // Step 3: Seller pays profit-based royalty to organizer
   let royaltyPaid = '0';
+  let royaltyError = null;
+
+  console.log(`[XRPL] Royalty check: profit=${profit} XRP, royaltyXrp=${royaltyXrp}, royaltyDrops=${royaltyDrops}, organizerAddress=${ticketMetadata.organizerAddress || 'MISSING'}, sellerPaidPrice=${sellerPaidPrice}`);
+
   if (royaltyDrops > 0 && ticketMetadata.organizerAddress) {
-    console.log(`[XRPL] Sending royalty ${royaltyXrp} XRP (${royaltyDrops} drops) from seller → organizer ${ticketMetadata.organizerAddress.slice(0, 12)}…`);
+    console.log(`[XRPL] Sending royalty ${royaltyXrp} XRP (${royaltyDrops} drops) from seller ${sellerWallet.address.slice(0, 12)}… → organizer ${ticketMetadata.organizerAddress.slice(0, 12)}…`);
     const royaltyTx = {
       TransactionType: 'Payment',
       Account: sellerWallet.address,
@@ -393,13 +369,20 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
       const royaltyResult = await submitWithBuffer(client, royaltyTx, sellerWallet);
       if (royaltyResult.result.meta.TransactionResult === 'tesSUCCESS') {
         royaltyPaid = royaltyXrp.toFixed(6);
-        console.log(`[XRPL] Royalty paid: ${royaltyPaid} XRP → organizer`);
+        console.log(`[XRPL] ✅ Royalty paid: ${royaltyPaid} XRP → organizer`);
       } else {
-        console.warn(`[XRPL] Royalty payment failed: ${royaltyResult.result.meta.TransactionResult}`);
+        royaltyError = `Royalty tx failed: ${royaltyResult.result.meta.TransactionResult}`;
+        console.error(`[XRPL] ❌ ${royaltyError}`);
       }
     } catch (err) {
-      console.warn(`[XRPL] Royalty payment error: ${err.message}`);
+      royaltyError = `Royalty tx error: ${err.message}`;
+      console.error(`[XRPL] ❌ ${royaltyError}`);
     }
+  } else if (royaltyDrops <= 0) {
+    console.log(`[XRPL] No royalty due (profit=${profit}, royaltyDrops=${royaltyDrops})`);
+  } else {
+    royaltyError = 'organizerAddress is missing — cannot send royalty';
+    console.error(`[XRPL] ❌ ${royaltyError}`);
   }
 
   return {
@@ -407,6 +390,7 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
     tokenId,
     resalePrice,
     royaltyPaid,
+    royaltyError,
   };
 }
 

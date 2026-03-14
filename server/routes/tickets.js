@@ -171,6 +171,8 @@ router.post('/buy', authMiddleware, async (req, res) => {
         organizerAddress: ticket.eventId?.organizerAddress,
       };
 
+      logger.info('TICKETS', `Resale buy: resalePrice=${resalePrice}, sellerPaidPrice=${ticket.price}, royaltyBps=${metadata.royaltyBps}, organizerAddr=${metadata.organizerAddress || 'MISSING'}, sellerRole=${seller.role}`);
+
       const result = await resellTicket(client, sellerWallet, buyerWallet, ticket.tokenId, resalePrice, metadata);
 
       ticket.ownerAddress = buyerWallet.address;
@@ -184,8 +186,9 @@ router.post('/buy', authMiddleware, async (req, res) => {
 
       return res.json({
         success: true,
-        message: `Ticket purchased for ${resalePrice} XRP`,
+        message: `Ticket purchased for ${resalePrice} XRP` + (result.royaltyPaid !== '0' ? ` (royalty: ${result.royaltyPaid} XRP to organizer)` : ''),
         royaltyPaid: result.royaltyPaid,
+        royaltyError: result.royaltyError || undefined,
         txHash: result.txHash,
       });
     }
@@ -254,6 +257,8 @@ router.post('/resell', authMiddleware, async (req, res) => {
       organizerAddress: ticket.eventId?.organizerAddress,
     };
 
+    logger.info('TICKETS', `Resell: resalePrice=${resalePrice}, sellerPaidPrice=${ticket.price}, royaltyBps=${metadata.royaltyBps}, organizerAddr=${metadata.organizerAddress || 'MISSING'}`);
+
     const result = await resellTicket(client, sellerWallet, buyerWallet, ticket.tokenId, resalePrice, metadata);
 
     ticket.ownerAddress = buyerWallet.address;
@@ -267,8 +272,9 @@ router.post('/resell', authMiddleware, async (req, res) => {
 
     res.json({
       success: true,
-      message: `Ticket resold for ${resalePrice} XRP`,
+      message: `Ticket resold for ${resalePrice} XRP` + (result.royaltyPaid !== '0' ? ` (royalty: ${result.royaltyPaid} XRP to organizer)` : ''),
       royaltyPaid: result.royaltyPaid,
+      royaltyError: result.royaltyError || undefined,
       txHash: result.txHash,
     });
   } catch (err) {
