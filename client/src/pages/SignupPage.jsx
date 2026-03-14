@@ -17,9 +17,14 @@ export default function SignupPage() {
     e.preventDefault();
     setError('');
     setLoading(true);
-    const data = await signup(form.email, form.password, form.displayName, form.role);
-    if (!data.success) setError(data.error);
-    setLoading(false);
+    try {
+      const data = await signup(form.email, form.password, form.displayName, form.role);
+      if (!data.success) setError(data.error);
+    } catch (err) {
+      setError('An unexpected error occurred. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const update = (key, value) => setForm(prev => ({ ...prev, [key]: value }));
