@@ -1,0 +1,15 @@
+{
+  "name": "xrpl-antiscalp-tickets",
+  "version": "1.0.0",
+  "description": "Anti-scalping ticketing system on XRPL using XLS-20 NFTs and simulated RLUSD",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "demo": "node demo.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "xrpl": "^3.1.0"
+  }
+}

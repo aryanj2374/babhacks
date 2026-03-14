@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>XRPL Anti-Scalping Tickets</title>
+  <meta name="description" content="Anti-scalping ticketing system built on the XRP Ledger using XLS-20 NFTs and RLUSD stablecoin">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+
+    <!-- ═══ Header ═══ -->
+    <header class="header">
+      <div class="header-badge">⛓️ Built on XRP Ledger Testnet</div>
+      <h1>Anti-Scalp Tickets</h1>
+      <p>Event tickets as NFTs with price caps, resale limits, and automatic royalties — powered by XRPL.</p>
+    </header>
+
+    <div class="info-banner" id="networkBanner">
+      ℹ️ This demo runs on XRPL Testnet. All wallets and tokens are for testing only.
+    </div>
+
+    <div class="steps">
+
+      <!-- ═══ Step 1: Setup ═══ -->
+      <div class="step-card active" id="step1">
+        <div class="step-header">
+          <div class="step-number">1</div>
+          <div class="step-title">Setup Wallets & RLUSD</div>
+        </div>
+        <div class="step-desc">
+          Create 3 funded wallets (Organizer, Fan 1, Fan 2) on XRPL Testnet and distribute simulated RLUSD stablecoin.
+          Uses <strong>Testnet Faucet</strong>, <strong>TrustSet</strong>, and <strong>Payment</strong> transactions.
+        </div>
+        <button class="btn btn-primary" id="setupBtn" onclick="doSetup()">
+          <span class="spinner"></span>
+          <span class="btn-text">🚀 Initialize Demo</span>
+        </button>
+        <div class="result-box" id="setupResult"></div>
+        <div class="wallet-grid" id="walletGrid" style="display:none;"></div>
+      </div>
+
+      <!-- ═══ Step 2: Mint ═══ -->
+      <div class="step-card" id="step2">
+        <div class="step-header">
+          <div class="step-number">2</div>
+          <div class="step-title">Mint Ticket NFTs</div>
+        </div>
+        <div class="step-desc">
+          Organizer mints an event ticket as an NFT using <strong>NFTokenMint</strong> (XLS-20).
+          Metadata includes event info, price, max resale price, and resale limits.
+          <strong>TransferFee</strong> (10%) ensures automatic royalties on every resale.
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Event Name</label>
+            <input type="text" id="eventName" value="Blockchain Music Festival 2026">
+          </div>
+          <div class="form-group">
+            <label>Seat</label>
+            <input type="text" id="seat" value="VIP-A101">
+          </div>
+          <div class="form-group">
+            <label>Price (RLUSD)</label>
+            <input type="number" id="originalPrice" value="150">
+          </div>
+          <div class="form-group">
+            <label>Max Resale Price</label>
+            <input type="number" id="maxResalePrice" value="200">
+          </div>
+          <div class="form-group">
+            <label>Event Date</label>
+            <input type="date" id="eventDate" value="2026-12-31">
+          </div>
+          <div class="form-group">
+            <label>Max Resales</label>
+            <input type="number" id="maxResales" value="3" min="0">
+          </div>
+        </div>
+        <button class="btn btn-primary" id="mintBtn" onclick="doMint()" disabled>
+          <span class="spinner"></span>
+          <span class="btn-text">🎫 Mint Ticket</span>
+        </button>
+        <div class="result-box" id="mintResult"></div>
+      </div>
+
+      <!-- ═══ Step 3: Buy ═══ -->
+      <div class="step-card" id="step3">
+        <div class="step-header">
+          <div class="step-number">3</div>
+          <div class="step-title">Buy Ticket (Primary Sale)</div>
+        </div>
+        <div class="step-desc">
+          Fan 1 purchases the ticket from the Organizer.
+          Uses <strong>NFTokenCreateOffer</strong> (sell) + <strong>NFTokenAcceptOffer</strong> for atomic NFT↔RLUSD swap.
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Ticket</label>
+            <select id="buyTicketSelect"></select>
+          </div>
+          <div class="form-group">
+            <label>Buyer</label>
+            <select id="buyerSelect">
+              <option value="fan1">Fan 1</option>
+              <option value="fan2">Fan 2</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn btn-primary" id="buyBtn" onclick="doBuy()" disabled>
+          <span class="spinner"></span>
+          <span class="btn-text">🛒 Buy Ticket</span>
+        </button>
+        <div class="result-box" id="buyResult"></div>
+      </div>
+
+      <!-- ═══ Step 4: Resell (Scalp Attempt) ═══ -->
+      <div class="step-card" id="step4">
+        <div class="step-header">
+          <div class="step-number">4</div>
+          <div class="step-title">Resell Ticket (Anti-Scalping Demo)</div>
+        </div>
+        <div class="step-desc">
+          Test the anti-scalping enforcement. Try to resell above the max price (will be blocked!), then resell at a valid price.
+          <strong>TransferFee</strong> royalty is automatically paid to the organizer by the XRPL protocol.
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Ticket</label>
+            <select id="resellTicketSelect"></select>
+          </div>
+          <div class="form-group">
+            <label>Seller</label>
+            <select id="sellerSelect">
+              <option value="fan1">Fan 1</option>
+              <option value="fan2">Fan 2</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Buyer</label>
+            <select id="resellBuyerSelect">
+              <option value="fan2">Fan 2</option>
+              <option value="fan1">Fan 1</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Resale Price (RLUSD)</label>
+            <input type="number" id="resalePrice" value="500" placeholder="Try 500 to test scalp block">
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button class="btn btn-danger" id="scalpBtn" onclick="doResell()" disabled>
+            <span class="spinner"></span>
+            <span class="btn-text">💸 Attempt Resale</span>
+          </button>
+        </div>
+        <div class="result-box" id="resellResult"></div>
+      </div>
+
+      <!-- ═══ Step 5: Verify ═══ -->
+      <div class="step-card" id="step5">
+        <div class="step-header">
+          <div class="step-number">5</div>
+          <div class="step-title">Verify Ticket Ownership</div>
+        </div>
+        <div class="step-desc">
+          Check who owns a specific ticket NFT and validate its metadata.
+          Uses <strong>account_nfts</strong> RPC to query the ledger directly.
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Check Wallet</label>
+            <select id="verifyWallet">
+              <option value="fan1">Fan 1</option>
+              <option value="fan2">Fan 2</option>
+              <option value="organizer">Organizer</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Ticket</label>
+            <select id="verifyTicketSelect"></select>
+          </div>
+        </div>
+        <button class="btn btn-primary" id="verifyBtn" onclick="doVerify()" disabled>
+          <span class="spinner"></span>
+          <span class="btn-text">🔍 Verify Ownership</span>
+        </button>
+        <div class="result-box" id="verifyResult"></div>
+      </div>
+
+    </div>
+
+    <!-- ═══ Transaction Log ═══ -->
+    <div class="tx-log" id="txLog" style="display:none;">
+      <h3>📜 Transaction Log</h3>
+      <div id="txEntries"></div>
+    </div>
+
+    <div style="height:60px;"></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
