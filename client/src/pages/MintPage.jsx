@@ -20,7 +20,7 @@ export default function MintPage() {
 
   async function loadEvents() {
     setLoading(true);
-    const data = await api('/events');
+    const data = await api('/events/mine');
     if (data.success) {
       setEvents(data.events);
       if (data.events.length > 0 && !selectedEvent) setSelectedEvent(data.events[0].id);

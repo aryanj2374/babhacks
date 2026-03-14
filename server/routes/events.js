@@ -44,6 +44,36 @@ router.get('/', async (req, res) => {
 });
 
 /**
+ * GET /api/events/mine
+ * List events owned by the authenticated organizer.
+ */
+router.get('/mine', authMiddleware, requireOrganizer, async (req, res) => {
+  try {
+    const events = await MongoEvent.find({ organizerId: req.user.id })
+      .sort({ date: 1 })
+      .lean();
+
+    const enriched = await Promise.all(events.map(async (ev) => {
+      const total_tickets = await MongoTicket.countDocuments({ eventId: ev._id });
+      return {
+        id: ev._id.toString(),
+        name: ev.name,
+        description: ev.description,
+        date: ev.date,
+        venue: ev.venue,
+        royalty_percent: ev.royaltyPercent ?? 10,
+        total_tickets,
+        available_tickets: total_tickets,
+      };
+    }));
+
+    res.json({ success: true, events: enriched });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * GET /api/events/:id
  * Event detail with tickets.
  */
