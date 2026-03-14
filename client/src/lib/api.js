@@ -25,8 +25,19 @@ export async function api(endpoint, method = 'GET', body = null) {
   try {
     const res = await fetch(`${BASE}${endpoint}`, opts);
     const data = await res.json();
+
+    // ── Debug logging for demo ──
+    const tag = data.success ? '%c✅ API' : '%c❌ API';
+    const color = data.success ? 'color: #10b981; font-weight: bold' : 'color: #ef4444; font-weight: bold';
+    console.groupCollapsed(`${tag} ${method} ${endpoint}`, color);
+    console.log('Status:', res.status);
+    if (body) console.log('Request:', body);
+    console.log('Response:', data);
+    console.groupEnd();
+
     return data;
   } catch (err) {
+    console.error(`%c❌ API ${method} ${endpoint} — ${err.message}`, 'color: #ef4444');
     if (err.name === 'AbortError') {
       return { success: false, error: 'Request timed out. The XRPL transaction may still be processing — check back in a moment.' };
     }
