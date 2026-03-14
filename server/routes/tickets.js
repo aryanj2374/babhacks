@@ -80,10 +80,15 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
     const royaltyBps = Math.round(Math.min(50, Math.max(0, royaltyPct)) * 1000);
 
     // Ensure organizer has a RLUSD TrustLine so royalties can be received.
-    const db = getDb();
-    const issuerRow = db.prepare("SELECT value FROM platform_config WHERE key = 'issuer_address'").get();
-    if (issuerRow) {
-      await establishTrustLine(client, organizerWallet, issuerRow.value);
+    // Guarded by trustLineEstablished to avoid repeated on-chain TrustSet calls.
+    if (!user.trustLineEstablished) {
+      const db = getDb();
+      const issuerRow = db.prepare("SELECT value FROM platform_config WHERE key = 'issuer_address'").get();
+      if (issuerRow) {
+        await establishTrustLine(client, organizerWallet, issuerRow.value);
+        user.trustLineEstablished = true;
+        await user.save();
+      }
     }
 
     const mintedTickets = [];
