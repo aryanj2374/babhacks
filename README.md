@@ -1,7 +1,7 @@
-# 🎫 XRPL Anti-Scalping Ticketing System
+# 🎫 OpenTix — XRPL Ticketing Platform
 Created by: Aryan Achuthan, Aryan Jain, Arvind Krishna Sivakumar, Kabilesh Yuvaraj
 
-A full-stack NFT ticketing platform built on the **XRP Ledger Testnet**. Tickets are minted as XLS-20 NFTs with built-in anti-scalping protections: max resale prices, resale limits, and automatic royalties via XRPL's `TransferFee`.
+A full-stack NFT ticketing platform built on the **XRP Ledger Testnet**. Tickets are minted as XLS-20 NFTs with built-in price caps, resale limits, and automatic royalties via XRPL's `TransferFee`.
 
 ## Features
 
@@ -10,7 +10,7 @@ A full-stack NFT ticketing platform built on the **XRP Ledger Testnet**. Tickets
 - **Wallet Management** — View XRP/RLUSD balances, demo RLUSD faucet
 - **Event Creation** — Organizers create events and mint NFT tickets
 - **Ticket Marketplace** — Browse and buy tickets with RLUSD stablecoin
-- **Anti-Scalping** — Max resale price enforcement + resale count limits
+- **Price Caps** — Max resale price enforcement + resale count limits
 - **Auto Royalties** — 10% royalty auto-paid to organizer on every resale (XRPL protocol-level)
 - **QR Ticket Verification** — Generate QR codes, verify ownership on-chain
 - **Ticket Redemption** — Organizers mark tickets as redeemed at events
@@ -99,7 +99,7 @@ Each fan account is pre-funded with **1000 RLUSD**. The organizer has a sample e
 ### Tickets
 - `POST /api/tickets/mint` — Mint NFT tickets (organizer)
 - `POST /api/tickets/buy` — Buy a ticket
-- `POST /api/tickets/resell` — Resell with anti-scalping checks
+- `POST /api/tickets/resell` — Resell with OpenTix price-cap checks
 - `POST /api/tickets/list-for-sale` — List on marketplace
 - `GET /api/tickets/marketplace` — Browse available tickets
 - `GET /api/tickets/my` — Your tickets

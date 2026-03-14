@@ -48,7 +48,7 @@ JWT stored in `localStorage`. `server/auth.js` exports `authMiddleware` (verify 
 - Organizers can set a custom royalty percentage (0–50%) per mint batch; the route converts it: `royaltyBps = pct * 1000`
 - Buys/resales use `NFTokenCreateOffer` (seller) + `NFTokenAcceptOffer` (buyer) — atomic swap, XRP transferred automatically
 
-### Anti-scalping enforcement
+### OpenTix enforcement
 Two layers:
 1. **Application layer** — `tickets.max_resale_price` and `tickets.max_resales` checked in `server/routes/tickets.js` before any on-chain action
 2. **Protocol layer** — `TransferFee` auto-collects royalty on every NFT resale at the XRPL level (protocol-enforced, no smart contract needed)

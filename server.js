@@ -1,5 +1,5 @@
 /**
- * XRPL Anti-Scalping Ticketing System — Express API Server
+ * OpenTix Ticketing Platform — Express API Server
  */
 
 require('dotenv').config();
@@ -66,7 +66,7 @@ async function connectMongo() {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   console.log('\n═══════════════════════════════════════════════════════');
-  console.log('  🎫 XRPL Anti-Scalping Ticketing System');
+  console.log('  🎫 OpenTix Ticketing Platform');
   console.log('═══════════════════════════════════════════════════════');
   console.log(`  🌐 Web UI:  http://localhost:${PORT}`);
   console.log(`  📡 API:     http://localhost:${PORT}/api`);

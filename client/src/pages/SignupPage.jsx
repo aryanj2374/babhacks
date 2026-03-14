@@ -38,7 +38,7 @@ export default function SignupPage() {
             <TicketIcon size={20} />
           </div>
           <h1>Create account</h1>
-          <p>Anti-scalping ticketing on the XRP Ledger</p>
+          <p>OpenTix ticketing on the XRP Ledger</p>
         </div>
 
         <form onSubmit={handleSubmit} className="auth-form">

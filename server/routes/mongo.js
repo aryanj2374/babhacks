@@ -119,7 +119,7 @@ router.post('/resell', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Ticket not found in MongoDB' });
     }
 
-    // Anti-scalping enforcement
+    // OpenTix enforcement
     if (parseFloat(resalePrice) > parseFloat(ticket.maxResalePrice)) {
       return res.status(400).json({
         success: false,

@@ -1,6 +1,6 @@
 /**
  * ═══════════════════════════════════════════════════════════════════
- * XRPL Anti-Scalping Ticketing System — Frontend Application
+ * OpenTix Ticketing Platform — Frontend Application
  * ═══════════════════════════════════════════════════════════════════
  * 
  * Handles API calls to the Express backend and updates the UI
@@ -229,12 +229,12 @@ async function doResell() {
     const data = await res.json();
 
     if (!data.success) {
-      // Anti-scalping block!
+      // OpenTix price-cap block!
       showResult('resellResult', 'error',
         `🚫 ${data.error}<br><br>` +
-        `<em>The anti-scalping system blocked this resale. Try a lower price!</em>`
+        `<em>OpenTix blocked this resale — price exceeds the cap. Try a lower price!</em>`
       );
-      addTxEntry('BLOCKED', `Resale at ${body.resalePrice} RLUSD — BLOCKED by anti-scalping`);
+      addTxEntry('BLOCKED', `Resale at ${body.resalePrice} RLUSD — BLOCKED by OpenTix`);
       return;
     }
 

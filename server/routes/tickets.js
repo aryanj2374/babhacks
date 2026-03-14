@@ -366,7 +366,7 @@ router.post('/list-for-sale', authMiddleware, async (req, res) => {
       return res.status(403).json({ success: false, error: 'You do not own this ticket' });
     }
 
-    // Anti-scalping check: price cap
+    // OpenTix check: price cap
     if (parseFloat(resalePrice) > parseFloat(ticket.maxResalePrice)) {
       return res.status(400).json({
         success: false,
@@ -374,7 +374,7 @@ router.post('/list-for-sale', authMiddleware, async (req, res) => {
       });
     }
 
-    // Anti-scalping check: resale count (resaleCount is remaining, 0 = blocked)
+    // OpenTix check: resale count (resaleCount is remaining, 0 = blocked)
     if (ticket.maxResales > 0 && ticket.resaleCount <= 0) {
       return res.status(400).json({
         success: false,

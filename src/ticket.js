@@ -1,10 +1,10 @@
 /**
- * Core Ticketing Logic for XRPL Anti-Scalping System
+ * Core Ticketing Logic for OpenTix
  * 
  * This module implements the four main functions:
  *   1. mintTicket   — Organizer creates an NFT ticket (XLS-20 NFTokenMint)
  *   2. buyTicket    — Fan purchases a ticket (NFTokenCreateOffer + NFTokenAcceptOffer)
- *   3. resellTicket — Fan resells with anti-scalping enforcement
+ *   3. resellTicket — Fan resells with OpenTix enforcement
  *   4. verifyTicket — Ownership & validity check (account_nfts)
  * 
  * XRPL Primitives used:
@@ -14,7 +14,7 @@
  *   - TransferFee: Built-in royalty mechanism (paid to original minter on every resale)
  *   - account_nfts: Query an account's NFT inventory
  * 
- * Anti-Scalping Enforcement:
+ * OpenTix Enforcement:
  *   - Max resale price is encoded in NFT metadata and checked before creating offers
  *   - Resale count limits are tracked in metadata and enforced at application layer
  *   - Royalties are automatically handled by XRPL's TransferFee (up to 50%)
@@ -285,24 +285,24 @@ async function buyTicket(client, buyerWallet, sellerWallet, tokenId, price, issu
 
 
 // ═══════════════════════════════════════════════════════════════════
-// 3. RESELL TICKET (Secondary Market with Anti-Scalping)
+// 3. RESELL TICKET (Secondary Market with OpenTix Enforcement)
 // ═══════════════════════════════════════════════════════════════════
 
 /**
- * Resell a ticket on the secondary market with anti-scalping enforcement.
- * 
- * Anti-Scalping Checks (Application Layer):
+ * Resell a ticket on the secondary market with OpenTix enforcement.
+ *
+ * OpenTix Checks (Application Layer):
  *   1. Resale price must not exceed maxResalePrice from ticket metadata
  *   2. Resale count must not exceed maxResales from ticket metadata
  *   3. Event date must not have passed
- * 
+ *
  * XRPL Primitives (Protocol Layer):
  *   - TransferFee: Royalty automatically deducted and sent to organizer (minter)
  *   - NFTokenCreateOffer: Creates the sell offer at the validated price
  *   - NFTokenAcceptOffer: Buyer accepts, completing the atomic swap
- * 
+ *
  * The combination of application-layer price caps + protocol-layer royalties
- * creates a robust anti-scalping system:
+ * creates a robust open-tix system:
  *   - Scalpers cannot list above maxResalePrice (app enforces)
  *   - Organizers always get their royalty cut (XRPL enforces)
  *   - Resale limits prevent ticket churning (app enforces)
@@ -317,37 +317,37 @@ async function buyTicket(client, buyerWallet, sellerWallet, tokenId, price, issu
  * @returns {Object} { txHash, tokenId, resalePrice, royaltyPaid }
  */
 async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePrice, issuerAddress, ticketMetadata) {
-  // ── Anti-Scalping Check 1: Max Resale Price ──
+  // ── OpenTix Check 1: Max Resale Price ──
   const maxPrice = parseFloat(ticketMetadata.maxResalePrice);
   const proposedPrice = parseFloat(resalePrice);
   if (proposedPrice > maxPrice) {
     throw new Error(
-      `Anti-scalping: resale price ${resalePrice} XRP exceeds maximum of ${ticketMetadata.maxResalePrice} XRP`
+      `OpenTix: resale price ${resalePrice} XRP exceeds maximum of ${ticketMetadata.maxResalePrice} XRP`
     );
   }
 
-  // ── Anti-Scalping Check 2: Resale Count Limit (countdown: remaining → 0) ──
+  // ── OpenTix Check 2: Resale Count Limit (countdown: remaining → 0) ──
   const maxResales = ticketMetadata.maxResales || 0;
   // resalesRemaining counts down from maxResales to 0; 0 means no resales left
   const resalesRemaining = ticketMetadata.resalesRemaining ?? ticketMetadata.maxResales ?? 0;
   if (maxResales > 0 && resalesRemaining <= 0) {
     throw new Error(
-      `🚫 ANTI-SCALPING: This ticket has no resales remaining (0 / ${maxResales})`
+      `🚫 OPENTIX: This ticket has no resales remaining (0 / ${maxResales})`
     );
   }
 
-  // ── Anti-Scalping Check 3: Event Date Validity ──
+  // ── OpenTix Check 3: Event Date Validity ──
   const eventDate = new Date(ticketMetadata.eventDate);
   if (eventDate < new Date()) {
     throw new Error(`Ticket's event has already passed (${ticketMetadata.eventDate})`);
   }
 
-  console.log(`  🔍 Anti-scalping checks passed:`);
+  console.log(`  🔍 OpenTix checks passed:`);
   console.log(`     Price: ${resalePrice}/${ticketMetadata.maxResalePrice} RLUSD ✓`);
   console.log(`     Resales remaining: ${resalesRemaining - 1}/${maxResales || '∞'} ✓`);
 
   // ── Execute the resale using XRPL NFT offer primitives ──
-  // Same flow as buyTicket, but with anti-scalping validation done above
+  // Same flow as buyTicket, but with open-tix validation done above
 
   // Step 1: Create sell offer
   const sellOfferTx = {

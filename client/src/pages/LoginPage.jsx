@@ -32,7 +32,7 @@ export default function LoginPage() {
             <TicketIcon size={20} />
           </div>
           <h1>Welcome back</h1>
-          <p>Sign in to your AntiScalp account</p>
+          <p>Sign in to your OpenTix account</p>
         </div>
 
         <form onSubmit={handleSubmit} className="auth-form">

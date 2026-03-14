@@ -169,7 +169,7 @@ export default function MarketplacePage() {
                       <span className="badge badge-owned">Yours</span>
                     )}
                   </div>
-                  <div className="mt-anti-scalp">
+                  <div className="mt-opentix">
                     Max {t.max_resale_price} RLUSD · {t.max_resales === 0 ? 'Unlimited' : t.resale_count} resales left
                   </div>
                 </div>

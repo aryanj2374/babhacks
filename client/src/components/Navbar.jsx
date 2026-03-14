@@ -33,7 +33,7 @@ export default function Navbar() {
       <div className="nav-inner">
         <NavLink to="/dashboard" className="nav-brand">
           <TicketIcon size={18} className="brand-icon-svg" />
-          <span className="brand-text">AntiScalp</span>
+          <span className="brand-text">OpenTix</span>
         </NavLink>
 
         <div className="nav-links">

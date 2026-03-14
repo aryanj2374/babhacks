@@ -492,7 +492,7 @@ body::before {
 }
 .price-value { font-family: var(--font-mono); font-size: 0.9rem; font-weight: 600; }
 .price-unit { font-size: 0.64rem; color: var(--text-muted); margin-left: 2px; }
-.mt-anti-scalp { font-size: 0.63rem; color: var(--text-muted); margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border-subtle); }
+.mt-opentix { font-size: 0.63rem; color: var(--text-muted); margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border-subtle); }
 
 /* ── Wallet ─────────────────────────────────────────────────────── */
 .wallet-address-full {

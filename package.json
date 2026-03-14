@@ -1,7 +1,7 @@
 {
-  "name": "xrpl-antiscalp-tickets",
+  "name": "opentix",
   "version": "1.0.0",
-  "description": "Anti-scalping ticketing system on XRPL using XLS-20 NFTs and native XRP payments",
+  "description": "OpenTix ticketing system on XRPL using XLS-20 NFTs and native XRP payments",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

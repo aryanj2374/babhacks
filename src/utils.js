@@ -1,5 +1,5 @@
 /**
- * Utility functions for XRPL Anti-Scalping Ticketing System
+ * Utility functions for OpenTix Ticketing Platform
  * 
  * Handles:
  *   - Metadata encoding/decoding (JSON ↔ hex for NFT URIs)
