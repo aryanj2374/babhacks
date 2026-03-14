@@ -143,7 +143,7 @@ router.post('/buy', authMiddleware, async (req, res) => {
 
     const ticket = await MongoTicket.findById(ticketId)
       .populate('currentOwnerId', 'role xrplSeed xrplAddress displayName')
-      .populate('eventId', 'date');
+      .populate('eventId', 'date royaltyPercent organizerAddress');
     if (!ticket) return res.status(404).json({ success: false, error: 'Ticket not found' });
     if (ticket.currentOwnerId?._id?.toString() === req.user.id) {
       return res.status(400).json({ success: false, error: 'You already own this ticket' });
@@ -166,6 +166,9 @@ router.post('/buy', authMiddleware, async (req, res) => {
       const metadata = {
         maxResalePrice: ticket.maxResalePrice,
         eventDate: ticket.eventId?.date,
+        royaltyBps: Math.round((ticket.eventId?.royaltyPercent ?? 10) * 1000),
+        sellerPaidPrice: ticket.price,
+        organizerAddress: ticket.eventId?.organizerAddress,
       };
 
       const result = await resellTicket(client, sellerWallet, buyerWallet, ticket.tokenId, resalePrice, metadata);
@@ -246,6 +249,9 @@ router.post('/resell', authMiddleware, async (req, res) => {
     const metadata = {
       maxResalePrice: ticket.maxResalePrice,
       eventDate: ticket.eventId?.date,
+      royaltyBps: Math.round((ticket.eventId?.royaltyPercent ?? 10) * 1000),
+      sellerPaidPrice: ticket.price,
+      organizerAddress: ticket.eventId?.organizerAddress,
     };
 
     const result = await resellTicket(client, sellerWallet, buyerWallet, ticket.tokenId, resalePrice, metadata);
