@@ -3,7 +3,6 @@
  */
 
 const express = require('express');
-const crypto = require('crypto');
 const QRCode = require('qrcode');
 const xrpl = require('xrpl');
 const router = express.Router();
@@ -12,9 +11,7 @@ const { authMiddleware, requireOrganizer } = require('../auth');
 const { decrypt } = require('../crypto');
 const { getClient } = require('../xrplClient');
 const { mintTicket, buyTicket, resellTicket } = require('../../src/ticket');
-const { getRLUSDBalance, establishTrustLine } = require('../../src/wallet');
 const { sleep } = require('../../src/utils');
-const { getDb } = require('../db');
 const MongoTicket = require('../models/Ticket');
 const MongoEvent  = require('../models/Event');
 const MongoUser   = require('../models/User');
@@ -79,18 +76,6 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
     const royaltyPct = event.royaltyPercent ?? 10;
     const royaltyBps = Math.round(Math.min(50, Math.max(0, royaltyPct)) * 1000);
 
-    // Ensure organizer has a RLUSD TrustLine so royalties can be received.
-    // Guarded by trustLineEstablished to avoid repeated on-chain TrustSet calls.
-    if (!user.trustLineEstablished) {
-      const db = getDb();
-      const issuerRow = db.prepare("SELECT value FROM platform_config WHERE key = 'issuer_address'").get();
-      if (issuerRow) {
-        await establishTrustLine(client, organizerWallet, issuerRow.value);
-        user.trustLineEstablished = true;
-        await user.save();
-      }
-    }
-
     const mintedTickets = [];
 
     for (const seatInfo of seats) {
@@ -114,11 +99,11 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
         price: metadata.originalPrice,
         maxResalePrice: metadata.maxResalePrice,
         maxResales: metadata.maxResales,
-        resaleCount: metadata.maxResales, // starts at max (countdown to 0)
+        resaleCount: 0,
         eventId: event._id,
         seat: metadata.seat,
         redeemed: false,
-        listedForSale: true,       // organizer tickets appear in marketplace immediately
+        listedForSale: true,
         listingPrice: metadata.originalPrice,
         txHash: result.txHash,
       });
@@ -152,8 +137,7 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
 
 /**
  * POST /api/tickets/buy
- * Buy a ticket from the marketplace.
- * Handles both primary sales (organizer → fan) and secondary/resale (fan → fan).
+ * Buy a ticket from the marketplace (primary or resale).
  * Body: { ticketId }
  */
 router.post('/buy', authMiddleware, async (req, res) => {
@@ -161,9 +145,9 @@ router.post('/buy', authMiddleware, async (req, res) => {
     const { ticketId } = req.body;
     if (!ticketId) return res.status(400).json({ success: false, error: 'ticketId is required' });
 
-    // Populate currentOwnerId so we can check seller role (primary vs resale)
     const ticket = await MongoTicket.findById(ticketId)
-      .populate('currentOwnerId', 'role xrplSeed xrplAddress displayName');
+      .populate('currentOwnerId', 'role xrplSeed xrplAddress displayName')
+      .populate('eventId', 'date');
     if (!ticket) return res.status(404).json({ success: false, error: 'Ticket not found' });
     if (ticket.currentOwnerId?._id?.toString() === req.user.id) {
       return res.status(400).json({ success: false, error: 'You already own this ticket' });
@@ -175,12 +159,6 @@ router.post('/buy', authMiddleware, async (req, res) => {
       return res.status(400).json({ success: false, error: 'Wallet not found' });
     }
 
-    const db = getDb();
-    const issuerRow = db.prepare("SELECT value FROM platform_config WHERE key = 'issuer_address'").get();
-    if (!issuerRow) {
-      return res.status(500).json({ success: false, error: 'Platform issuer not configured' });
-    }
-
     const client = await getClient();
     const buyerWallet = xrpl.Wallet.fromSeed(decrypt(buyer.xrplSeed));
     const sellerWallet = xrpl.Wallet.fromSeed(decrypt(seller.xrplSeed));
@@ -188,57 +166,43 @@ router.post('/buy', authMiddleware, async (req, res) => {
     const isResale = seller.role !== 'organizer';
 
     if (isResale) {
-      // ── Secondary / resale purchase ──
-      if (ticket.maxResales > 0 && ticket.resaleCount <= 0) {
+      if (ticket.maxResales > 0 && ticket.resaleCount >= ticket.maxResales) {
         return res.status(400).json({
           success: false,
-          error: `This ticket has no resales remaining (0 / ${ticket.maxResales})`,
+          error: `This ticket has reached the maximum resales (${ticket.maxResales})`,
         });
       }
 
       const resalePrice = ticket.listingPrice || ticket.price;
-      const ticketMeta = {
+      const metadata = {
         maxResalePrice: ticket.maxResalePrice,
         maxResales: ticket.maxResales,
-        resalesRemaining: ticket.resaleCount,
+        resaleCount: ticket.resaleCount,
         eventDate: ticket.eventId?.date,
       };
 
-      const result = await resellTicket(
-        client, sellerWallet, buyerWallet,
-        ticket.tokenId, resalePrice, issuerRow.value, ticketMeta
-      );
-
-      const newResaleCount = ticket.maxResales > 0 ? ticket.resaleCount - 1 : 0;
+      const result = await resellTicket(client, sellerWallet, buyerWallet, ticket.tokenId, resalePrice, metadata);
 
       ticket.ownerAddress = buyerWallet.address;
       ticket.currentOwnerId = req.user.id;
-      ticket.resaleCount = newResaleCount;
+      ticket.resaleCount = result.newResaleCount;
       ticket.price = resalePrice;
       ticket.listedForSale = false;
       ticket.listingPrice = '0';
       await ticket.save();
 
-      logger.buy({
-        buyerAddress: buyerWallet.address,
-        ticketId: ticket.tokenId,
-        amount: resalePrice,
-        txHash: result.txHash,
-      });
+      logger.buy({ buyerAddress: buyerWallet.address, ticketId: ticket.tokenId, amount: resalePrice, txHash: result.txHash });
 
       return res.json({
         success: true,
-        message: `Ticket purchased for ${resalePrice} RLUSD (resale; ${newResaleCount} resales remaining)`,
+        message: `Ticket purchased for ${resalePrice} XRP`,
         royaltyPaid: result.royaltyPaid,
         txHash: result.txHash,
       });
     }
 
-    // ── Primary sale (organizer → fan) ──
-    const result = await buyTicket(
-      client, buyerWallet, sellerWallet,
-      ticket.tokenId, ticket.price, issuerRow.value
-    );
+    // Primary sale (organizer → fan)
+    const result = await buyTicket(client, buyerWallet, sellerWallet, ticket.tokenId, ticket.price);
 
     ticket.ownerAddress = buyerWallet.address;
     ticket.currentOwnerId = req.user.id;
@@ -246,16 +210,11 @@ router.post('/buy', authMiddleware, async (req, res) => {
     ticket.listingPrice = '0';
     await ticket.save();
 
-    logger.buy({
-      buyerAddress: buyerWallet.address,
-      ticketId: ticket.tokenId,
-      amount: ticket.price,
-      txHash: result.txHash,
-    });
+    logger.buy({ buyerAddress: buyerWallet.address, ticketId: ticket.tokenId, amount: ticket.price, txHash: result.txHash });
 
     res.json({
       success: true,
-      message: `Ticket purchased for ${ticket.price} RLUSD`,
+      message: `Ticket purchased for ${ticket.price} XRP`,
       txHash: result.txHash,
     });
   } catch (err) {
@@ -287,59 +246,32 @@ router.post('/resell', authMiddleware, async (req, res) => {
       return res.status(400).json({ success: false, error: 'Wallet not found' });
     }
 
-    const db = getDb();
-    const issuerRow = db.prepare("SELECT value FROM platform_config WHERE key = 'issuer_address'").get();
-    if (!issuerRow) {
-      return res.status(500).json({ success: false, error: 'Platform issuer not configured' });
-    }
-
     const client = await getClient();
     const sellerWallet = xrpl.Wallet.fromSeed(decrypt(seller.xrplSeed));
     const buyerWallet = xrpl.Wallet.fromSeed(decrypt(buyer.xrplSeed));
 
-    // resaleCount is remaining resales (countdown). 0 = no resales left.
-    // Pre-check before hitting XRPL: block immediately if no resales remain
-    if (ticket.maxResales > 0 && ticket.resaleCount <= 0) {
-      return res.status(400).json({
-        success: false,
-        error: `This ticket has no resales remaining (0 / ${ticket.maxResales})`,
-      });
-    }
-
     const metadata = {
       maxResalePrice: ticket.maxResalePrice,
       maxResales: ticket.maxResales,
-      resalesRemaining: ticket.resaleCount,
+      resaleCount: ticket.resaleCount,
       eventDate: ticket.eventId?.date,
     };
 
-    const result = await resellTicket(
-      client, sellerWallet, buyerWallet,
-      ticket.tokenId, resalePrice, issuerRow.value, metadata
-    );
-
-    // Decrement remaining resale count; unlimited (maxResales=0) stays at 0
-    const newResaleCount = ticket.maxResales > 0 ? ticket.resaleCount - 1 : 0;
+    const result = await resellTicket(client, sellerWallet, buyerWallet, ticket.tokenId, resalePrice, metadata);
 
     ticket.ownerAddress = buyerWallet.address;
     ticket.currentOwnerId = buyerId;
-    ticket.resaleCount = newResaleCount;
+    ticket.resaleCount = result.newResaleCount;
     ticket.price = resalePrice;
     ticket.listedForSale = false;
     ticket.listingPrice = '0';
     await ticket.save();
 
-    logger.resell({
-      sellerAddress: sellerWallet.address,
-      ticketId: ticket.tokenId,
-      resalePrice,
-      txHash: result.txHash,
-      royaltyPaid: result.royaltyPaid,
-    });
+    logger.resell({ sellerAddress: sellerWallet.address, ticketId: ticket.tokenId, resalePrice, txHash: result.txHash, royaltyPaid: result.royaltyPaid });
 
     res.json({
       success: true,
-      message: `Ticket resold for ${resalePrice} RLUSD`,
+      message: `Ticket resold for ${resalePrice} XRP`,
       royaltyPaid: result.royaltyPaid,
       txHash: result.txHash,
     });
@@ -366,19 +298,17 @@ router.post('/list-for-sale', authMiddleware, async (req, res) => {
       return res.status(403).json({ success: false, error: 'You do not own this ticket' });
     }
 
-    // OpenTix check: price cap
     if (parseFloat(resalePrice) > parseFloat(ticket.maxResalePrice)) {
       return res.status(400).json({
         success: false,
-        error: `Price exceeds the maximum allowed resale price of ${ticket.maxResalePrice} RLUSD`,
+        error: `Price exceeds the maximum allowed resale price of ${ticket.maxResalePrice} XRP`,
       });
     }
 
-    // OpenTix check: resale count (resaleCount is remaining, 0 = blocked)
-    if (ticket.maxResales > 0 && ticket.resaleCount <= 0) {
+    if (ticket.maxResales > 0 && ticket.resaleCount >= ticket.maxResales) {
       return res.status(400).json({
         success: false,
-        error: `This ticket has no resales remaining (0 / ${ticket.maxResales})`,
+        error: `This ticket has reached the maximum resales (${ticket.maxResales})`,
       });
     }
 
@@ -386,7 +316,7 @@ router.post('/list-for-sale', authMiddleware, async (req, res) => {
     ticket.listingPrice = resalePrice;
     await ticket.save();
 
-    logger.info('TICKETS', `Listed ticket ${ticketId.slice(0, 8)}… for ${resalePrice} RLUSD`);
+    logger.info('TICKETS', `Listed ticket ${ticketId.slice(0, 8)}… for ${resalePrice} XRP`);
     res.json({ success: true, message: 'Ticket listed for sale' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -418,7 +348,6 @@ router.get('/marketplace', async (req, res) => {
       owner_name: t.currentOwnerId?.displayName || '',
       owner_role: t.currentOwnerId?.role || '',
       listingPrice: t.listingPrice || t.price,
-      // isResale: owner is not the organizer (fan-to-fan secondary sale)
       isResale: t.currentOwnerId?.role !== 'organizer',
     }));
 
