@@ -39,14 +39,14 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-const publicDir = path.join(__dirname, 'public');
-app.use(express.static(publicDir));
+const clientDist = path.join(__dirname, 'client', 'dist');
+app.use(express.static(clientDist));
 
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api')) {
     return res.status(404).json({ success: false, error: 'API endpoint not found' });
   }
-  res.sendFile(path.join(publicDir, 'index.html'));
+  res.sendFile(path.join(clientDist, 'index.html'));
 });
 
 // ── MongoDB Connection ──────────────────────────────────────────
