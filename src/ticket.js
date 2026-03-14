@@ -162,9 +162,7 @@ async function mintTicket(client, organizerWallet, metadata, royaltyBps = config
   // The token ID is found in the AffectedNodes of the transaction
   const tokenId = extractTokenId(result);
 
-  console.log(`  🎫 Minted ticket NFT: ${tokenId}`);
-  console.log(`     Event: ${fullMetadata.eventName} | Seat: ${fullMetadata.seat}`);
-  console.log(`     Price: ${fullMetadata.originalPrice} RLUSD | Max Resale: ${fullMetadata.maxResalePrice} RLUSD`);
+  console.log(`  Minted ticket NFT: ${tokenId} | Event: ${fullMetadata.eventName} | Seat: ${fullMetadata.seat}`);
 
   return {
     tokenId,
@@ -235,23 +233,16 @@ function extractTokenId(result) {
  * @param {string} issuerAddress - RLUSD issuer address for payment
  * @returns {Object} { txHash, tokenId, price }
  */
-async function buyTicket(client, buyerWallet, sellerWallet, tokenId, price, issuerAddress) {
+async function buyTicket(client, buyerWallet, sellerWallet, tokenId, price) {
   // Step 1: Seller creates a sell offer
-  // NFTokenCreateOffer with Flags=1 (tfSellNFToken) means "I'm selling this NFT"
   const sellOfferTx = {
     TransactionType: 'NFTokenCreateOffer',
     Account: sellerWallet.address,
     NFTokenID: tokenId,
-    // Amount in RLUSD (IOU format: { currency, issuer, value })
-    Amount: {
-      currency: config.RLUSD_CURRENCY,
-      issuer: issuerAddress,
-      value: price,
-    },
-    // Destination: restrict who can accept this offer (the buyer)
+    // XRP amount must be in drops (1 XRP = 1,000,000 drops)
+    Amount: xrpl.xrpToDrops(price),
     Destination: buyerWallet.address,
-    // Flags: 1 = tfSellNFToken (this is a sell offer)
-    Flags: 1,
+    Flags: 1, // tfSellNFToken
   };
 
   const sellResult = await submitWithBuffer(client, sellOfferTx, sellerWallet);
@@ -279,7 +270,7 @@ async function buyTicket(client, buyerWallet, sellerWallet, tokenId, price, issu
     throw new Error(`Accept offer failed: ${acceptResult.result.meta.TransactionResult}`);
   }
 
-  console.log(`  ✅ Ticket purchased! NFT ${tokenId.slice(0, 16)}... transferred to ${buyerWallet.address}`);
+  console.log(`  Ticket purchased! NFT ${tokenId.slice(0, 16)}... transferred to ${buyerWallet.address}`);
 
   return {
     txHash: acceptResult.result.hash,
@@ -322,13 +313,13 @@ async function buyTicket(client, buyerWallet, sellerWallet, tokenId, price, issu
  * @param {Object} ticketMetadata - Original ticket metadata (from NFT URI)
  * @returns {Object} { txHash, tokenId, resalePrice, royaltyPaid }
  */
-async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePrice, issuerAddress, ticketMetadata) {
+async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePrice, ticketMetadata) {
   // ── Anti-Scalping Check 1: Max Resale Price ──
   const maxPrice = parseFloat(ticketMetadata.maxResalePrice);
   const proposedPrice = parseFloat(resalePrice);
   if (proposedPrice > maxPrice) {
     throw new Error(
-      `🚫 ANTI-SCALPING: Resale price ${resalePrice} RLUSD exceeds maximum allowed price of ${ticketMetadata.maxResalePrice} RLUSD`
+      `Anti-scalping: resale price ${resalePrice} XRP exceeds maximum of ${ticketMetadata.maxResalePrice} XRP`
     );
   }
 
@@ -345,9 +336,7 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
   // ── Anti-Scalping Check 3: Event Date Validity ──
   const eventDate = new Date(ticketMetadata.eventDate);
   if (eventDate < new Date()) {
-    throw new Error(
-      `🚫 INVALID: This ticket's event has already passed (${ticketMetadata.eventDate})`
-    );
+    throw new Error(`Ticket's event has already passed (${ticketMetadata.eventDate})`);
   }
 
   console.log(`  🔍 Anti-scalping checks passed:`);
@@ -400,7 +389,6 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
   const effectiveBps = ticketMetadata.royaltyBps ?? config.DEFAULT_ROYALTY_BPS;
   const royaltyPercent = effectiveBps / 1000;
   const royaltyAmount = (proposedPrice * effectiveBps / 100000).toFixed(2);
-
   console.log(`  ✅ Ticket resold! NFT transferred to ${buyerWallet.address}`);
   console.log(`     💰 Royalty auto-paid to organizer: ${royaltyAmount} RLUSD (${royaltyPercent}%)`);
 

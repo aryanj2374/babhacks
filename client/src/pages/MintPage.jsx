@@ -226,11 +226,11 @@ export default function MintPage() {
                       </div>
                       <div className="tpc-field">
                         <div className="tpc-label">Price</div>
-                        <div className="tpc-val">{previewSeat.originalPrice || '—'} <span style={{ fontSize: '0.62rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>RLUSD</span></div>
+                        <div className="tpc-val">{previewSeat.originalPrice || '—'} <span style={{ fontSize: '0.62rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>XRP</span></div>
                       </div>
                       <div className="tpc-field">
                         <div className="tpc-label">Max Resale</div>
-                        <div className="tpc-val">{previewSeat.maxResalePrice || '—'} <span style={{ fontSize: '0.62rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>RLUSD</span></div>
+                        <div className="tpc-val">{previewSeat.maxResalePrice || '—'} <span style={{ fontSize: '0.62rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>XRP</span></div>
                       </div>
                       <div className="tpc-field">
                         <div className="tpc-label">Resales Left</div>
@@ -258,7 +258,7 @@ export default function MintPage() {
 
               {/* Seat column headers */}
               <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.9fr 0.9fr 0.7fr auto', gap: '7px', padding: '6px 10px', borderBottom: '1px solid var(--border-subtle)' }}>
-                {['Seat', 'Price (RLUSD)', 'Max Resale', 'Max #', ''].map(h => (
+                {['Seat', 'Price (XRP)', 'Max Resale', 'Max #', ''].map(h => (
                   <span key={h} style={{ fontSize: '0.6rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.8px', color: 'var(--text-muted)' }}>{h}</span>
                 ))}
               </div>

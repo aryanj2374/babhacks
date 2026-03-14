@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../lib/api';
-import { WalletIcon, TicketIcon, ZapIcon, TagIcon } from '../components/Icons';
+import { WalletIcon, TicketIcon, ZapIcon, TagIcon, UserIcon } from '../components/Icons';
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -24,9 +24,9 @@ export default function DashboardPage() {
     setLoading(false);
   }
 
-  async function handleFundRLUSD() {
+  async function handleFundXRP() {
     setFunding(true);
-    const data = await api('/wallet/fund-rlusd', 'POST', { amount: '500' });
+    const data = await api('/wallet/fund-xrp', 'POST');
     if (data.success) await loadData();
     else alert(data.error);
     setFunding(false);
@@ -55,48 +55,37 @@ export default function DashboardPage() {
         <span className="page-header p">Welcome back, {user?.displayName}</span>
       </div>
 
-      {/* Stat row */}
-      <div className="stat-row">
-        <div className="stat-card">
-          <div className="stat-label">XRP Balance</div>
-          <div className="stat-value">
-            {balances?.balances?.xrp || '0'}
-            <span className="stat-unit"> XRP</span>
-          </div>
-          <div className="stat-sub" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-            {balances?.address ? `${balances.address.slice(0, 10)}…${balances.address.slice(-5)}` : '—'}
-          </div>
-        </div>
-
-        <div className="stat-card accent">
-          <div className="stat-label">RLUSD Balance</div>
-          <div className="stat-value">
-            {balances?.balances?.rlusd || '0'}
-            <span className="stat-unit"> RLUSD</span>
-          </div>
-          <div style={{ marginTop: '6px' }}>
-            <button className="btn btn-outline btn-sm" onClick={handleFundRLUSD} disabled={funding}>
-              {funding ? <><span className="spinner" />Funding…</> : '+ Get 500 RLUSD'}
-            </button>
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-label">Tickets</div>
-          <div className="stat-value">{tickets.length}</div>
-          <div className="stat-sub">{validCount} valid · {redeemedCount} redeemed</div>
-        </div>
-      </div>
-
-      {/* Main grid */}
       <div className="dash-grid">
-        {/* Left: ticket table + activity */}
+        {/* Left column: stat cards + tickets + activity */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+
+          {/* 2 stat cards side-by-side, matching panel width */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            <div className="stat-card accent">
+              <div className="stat-label">XRP Balance</div>
+              <div className="stat-value">
+                {balances?.balances?.xrp || '0'}
+                <span className="stat-unit"> XRP</span>
+              </div>
+              <div className="stat-sub" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                {balances?.address ? `${balances.address.slice(0, 10)}…${balances.address.slice(-5)}` : '—'}
+              </div>
+              <button className="btn btn-outline btn-sm" onClick={handleFundXRP} disabled={funding}>
+                {funding ? <><span className="spinner" />Funding…</> : '+ Refill XRP'}
+              </button>
+            </div>
+
+            <div className="stat-card">
+              <div className="stat-label">Tickets</div>
+              <div className="stat-value">{tickets.length}</div>
+              <div className="stat-sub">{validCount} valid · {redeemedCount} redeemed</div>
+            </div>
+          </div>
+
+          {/* Recent Tickets */}
           <div className="panel">
             <div className="panel-header">
-              <span className="panel-title">
-                <TicketIcon size={11} /> Recent Tickets
-              </span>
+              <span className="panel-title"><TicketIcon size={11} /> Recent Tickets</span>
               {tickets.length > 0 && (
                 <Link to="/my-tickets" style={{ fontSize: '0.7rem', color: 'var(--accent-primary)', textDecoration: 'none' }}>
                   View all →
@@ -163,7 +152,7 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* Right: wallet + account + network */}
+        {/* Right column: wallet + account + network */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           <div className="panel">
             <div className="panel-header">
@@ -174,40 +163,33 @@ export default function DashboardPage() {
               <code className="address-code">{balances?.address || '—'}</code>
             </div>
             <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: 600 }}>XRP</span>
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', fontWeight: 600 }}>{balances?.balances?.xrp || '0'}</span>
-              </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: 600 }}>RLUSD</span>
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', fontWeight: 600, color: 'var(--accent-primary)' }}>{balances?.balances?.rlusd || '0'}</span>
+                <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: 600 }}>XRP</span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', fontWeight: 600, color: 'var(--accent-primary)' }}>{balances?.balances?.xrp || '0'}</span>
               </div>
             </div>
             <div style={{ padding: '10px 12px' }}>
-              <button className="btn btn-outline btn-sm btn-full" onClick={handleFundRLUSD} disabled={funding}>
-                {funding ? <><span className="spinner" />Funding…</> : '+ Get 500 RLUSD'}
+              <button className="btn btn-outline btn-sm btn-full" onClick={handleFundXRP} disabled={funding}>
+                {funding ? <><span className="spinner" />Funding…</> : '+ Refill XRP'}
               </button>
             </div>
           </div>
 
           <div className="panel">
             <div className="panel-header">
-              <span className="panel-title">Account</span>
+              <span className="panel-title"><UserIcon size={11} /> Account</span>
             </div>
-            <div style={{ padding: '0' }}>
-              {[
-                { label: 'Role', value: <span className="settings-role">{user?.role}</span> },
-                { label: 'Email', value: user?.email },
-              ].map(({ label, value }) => (
-                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 14px', borderBottom: '1px solid var(--border-subtle)' }}>
-                  <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>{label}</span>
-                  <span style={{ fontSize: '0.78rem', fontWeight: 500 }}>{value}</span>
-                </div>
-              ))}
-            </div>
+            {[
+              { label: 'Role', value: <span className="settings-role">{user?.role}</span> },
+              { label: 'Email', value: user?.email },
+            ].map(({ label, value }) => (
+              <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 14px', borderBottom: '1px solid var(--border-subtle)' }}>
+                <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>{label}</span>
+                <span style={{ fontSize: '0.78rem', fontWeight: 500 }}>{value}</span>
+              </div>
+            ))}
           </div>
 
-          {/* Network Status */}
           <div className="panel">
             <div className="panel-header">
               <span className="panel-title"><TagIcon size={11} /> Network</span>
@@ -226,11 +208,7 @@ export default function DashboardPage() {
             </div>
             <div className="net-row">
               <span className="net-label">Currency</span>
-              <span className="net-val">RLUSD (simulated)</span>
-            </div>
-            <div className="net-row">
-              <span className="net-label">Royalty</span>
-              <span className="net-val">10% (on-chain)</span>
+              <span className="net-val">XRP (native)</span>
             </div>
             <div className="net-row">
               <span className="net-label">Endpoint</span>

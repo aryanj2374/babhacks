@@ -16,10 +16,12 @@ const { getClient } = require('../xrplClient');
 const { mintTicket, buyTicket, resellTicket } = require('../../src/ticket');
 const { getRLUSDBalance, establishTrustLine } = require('../../src/wallet');
 const { sleep } = require('../../src/utils');
+const MongoTicket = require('../models/Ticket');
+const MongoEvent  = require('../models/Event');
+const logger      = require('../logger');
 
 /**
  * GET /api/tickets/my
- * List tickets owned by current user.
  */
 router.get('/my', authMiddleware, async (req, res) => {
   try {
@@ -31,7 +33,6 @@ router.get('/my', authMiddleware, async (req, res) => {
       WHERE t.current_owner_id = ?
       ORDER BY e.date ASC
     `).all(req.user.id);
-
     res.json({ success: true, tickets });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -53,14 +54,10 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
 
     const db = getDb();
     const event = db.prepare('SELECT * FROM events WHERE id = ? AND organizer_id = ?').get(eventId, req.user.id);
-    if (!event) {
-      return res.status(404).json({ success: false, error: 'Event not found or not yours' });
-    }
+    if (!event) return res.status(404).json({ success: false, error: 'Event not found or not yours' });
 
     const walletRow = db.prepare('SELECT * FROM wallets WHERE user_id = ?').get(req.user.id);
-    if (!walletRow) {
-      return res.status(400).json({ success: false, error: 'No wallet found' });
-    }
+    if (!walletRow) return res.status(400).json({ success: false, error: 'No wallet found' });
 
     const client = await getClient();
     const organizerWallet = xrpl.Wallet.fromSeed(decrypt(walletRow.encrypted_seed));
@@ -87,8 +84,8 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
         eventId: event.id,
         eventName: event.name,
         seat: seatInfo.seat,
-        originalPrice: seatInfo.originalPrice || '100',
-        maxResalePrice: seatInfo.maxResalePrice || '150',
+        originalPrice: seatInfo.originalPrice || '10',
+        maxResalePrice: seatInfo.maxResalePrice || '15',
         eventDate: event.date,
         maxResales: parseInt(seatInfo.maxResales) || 3,
       };
@@ -114,9 +111,45 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
       mintedTickets.push({ ticketId, tokenId: result.tokenId, seat: metadata.seat, txHash: result.txHash });
     }
 
+    // ── Sync to MongoDB ──
+    try {
+      const walletRow2 = db.prepare('SELECT xrpl_address FROM wallets WHERE user_id = ?').get(req.user.id);
+      const mongoEvent = await MongoEvent.findOne({ sqliteId: eventId });
+      for (const mt of mintedTickets) {
+        await MongoTicket.create({
+          tokenId: mt.tokenId,
+          ownerAddress: walletRow2?.xrpl_address || '',
+          price: seats.find(s => s.seat === mt.seat)?.originalPrice || '10',
+          maxResalePrice: seats.find(s => s.seat === mt.seat)?.maxResalePrice || '15',
+          maxResales: parseInt(seats.find(s => s.seat === mt.seat)?.maxResales) || 3,
+          resaleCount: 0,
+          eventId: mongoEvent?._id || null,
+          seat: mt.seat,
+          redeemed: false,
+          txHash: mt.txHash,
+          sqliteId: mt.ticketId,
+        });
+        if (mongoEvent) {
+          mongoEvent.ticketIds.push(mt.tokenId);
+        }
+        logger.mongoSync('Ticket', 'create', mt.tokenId.slice(0, 16));
+      }
+      if (mongoEvent) await mongoEvent.save();
+    } catch (mongoErr) {
+      logger.error('MONGO_SYNC mint', mongoErr);
+    }
+
+    logger.mint({
+      eventId,
+      eventName: event.name,
+      ticketIds: mintedTickets.map(t => t.tokenId),
+      organizerAddress: organizerWallet.address,
+      txHash: mintedTickets[0]?.txHash || '',
+    });
+
     res.json({ success: true, tickets: mintedTickets });
   } catch (err) {
-    console.error('Mint error:', err);
+    logger.error('TICKETS mint', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -130,9 +163,7 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
 router.post('/buy', authMiddleware, async (req, res) => {
   try {
     const { ticketId } = req.body;
-    if (!ticketId) {
-      return res.status(400).json({ success: false, error: 'ticketId is required' });
-    }
+    if (!ticketId) return res.status(400).json({ success: false, error: 'ticketId is required' });
 
     const db = getDb();
     // Join with owner's role so we can detect primary vs resale
@@ -142,14 +173,11 @@ router.post('/buy', authMiddleware, async (req, res) => {
       JOIN users u ON t.current_owner_id = u.id
       WHERE t.id = ?
     `).get(ticketId);
-    if (!ticket) {
-      return res.status(404).json({ success: false, error: 'Ticket not found' });
-    }
+    if (!ticket) return res.status(404).json({ success: false, error: 'Ticket not found' });
     if (ticket.current_owner_id === req.user.id) {
       return res.status(400).json({ success: false, error: 'You already own this ticket' });
     }
 
-    // Get buyer and seller wallets
     const buyerWalletRow = db.prepare('SELECT * FROM wallets WHERE user_id = ?').get(req.user.id);
     const sellerWalletRow = db.prepare('SELECT * FROM wallets WHERE user_id = ?').get(ticket.current_owner_id);
     if (!buyerWalletRow || !sellerWalletRow) {
@@ -170,7 +198,6 @@ router.post('/buy', authMiddleware, async (req, res) => {
 
     if (isResale) {
       // ── Secondary / resale purchase ──
-      // Block if no resales remain
       if (ticket.max_resales > 0 && ticket.resale_count <= 0) {
         return res.status(400).json({
           success: false,
@@ -179,8 +206,6 @@ router.post('/buy', authMiddleware, async (req, res) => {
       }
 
       const resalePrice = meta.listingPrice || ticket.original_price;
-
-      // Build metadata for anti-scalping checks inside resellTicket
       const ticketMeta = { ...meta, resalesRemaining: ticket.resale_count };
 
       const result = await resellTicket(
@@ -200,6 +225,17 @@ router.post('/buy', authMiddleware, async (req, res) => {
       db.prepare(
         'INSERT INTO transactions (id, type, ticket_id, from_user_id, to_user_id, price, tx_hash) VALUES (?, ?, ?, ?, ?, ?, ?)'
       ).run(uuidv4(), 'RESELL', ticketId, ticket.current_owner_id, req.user.id, resalePrice, result.txHash);
+
+      // ── Sync to MongoDB ──
+      try {
+        await MongoTicket.findOneAndUpdate(
+          { tokenId: ticket.token_id },
+          { ownerAddress: buyerWallet.address, price: resalePrice, resaleCount: newResaleCount, listedForSale: false, listingPrice: '0' }
+        );
+        logger.mongoSync('Ticket', 'resell-buy', ticket.token_id.slice(0, 16));
+      } catch (mongoErr) {
+        logger.error('MONGO_SYNC resell-buy', mongoErr);
+      }
 
       return res.json({
         success: true,
@@ -221,20 +257,38 @@ router.post('/buy', authMiddleware, async (req, res) => {
       'INSERT INTO transactions (id, type, ticket_id, from_user_id, to_user_id, price, tx_hash) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(uuidv4(), 'BUY', ticketId, ticket.current_owner_id, req.user.id, ticket.original_price, result.txHash);
 
+    // ── Sync to MongoDB ──
+    try {
+      await MongoTicket.findOneAndUpdate(
+        { tokenId: ticket.token_id },
+        { ownerAddress: buyerWallet.address, listedForSale: false, listingPrice: '0' }
+      );
+      logger.mongoSync('Ticket', 'buy', ticket.token_id.slice(0, 16));
+    } catch (mongoErr) {
+      logger.error('MONGO_SYNC buy', mongoErr);
+    }
+
+    logger.buy({
+      buyerAddress: buyerWallet.address,
+      ticketId: ticket.token_id,
+      amount: ticket.original_price,
+      txHash: result.txHash,
+    });
+
     res.json({
       success: true,
       message: `Ticket purchased for ${ticket.original_price} RLUSD`,
       txHash: result.txHash,
     });
   } catch (err) {
-    console.error('Buy error:', err);
+    logger.error('TICKETS buy', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
 /**
  * POST /api/tickets/resell
- * Resell a ticket. Body: { ticketId, buyerId, resalePrice }
+ * Body: { ticketId, buyerId, resalePrice }
  */
 router.post('/resell', authMiddleware, async (req, res) => {
   try {
@@ -245,9 +299,7 @@ router.post('/resell', authMiddleware, async (req, res) => {
 
     const db = getDb();
     const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
-    if (!ticket) {
-      return res.status(404).json({ success: false, error: 'Ticket not found' });
-    }
+    if (!ticket) return res.status(404).json({ success: false, error: 'Ticket not found' });
     if (ticket.current_owner_id !== req.user.id) {
       return res.status(403).json({ success: false, error: 'You do not own this ticket' });
     }
@@ -259,6 +311,9 @@ router.post('/resell', authMiddleware, async (req, res) => {
     }
 
     const issuerRow = db.prepare("SELECT value FROM platform_config WHERE key = 'issuer_address'").get();
+    if (!issuerRow) {
+      return res.status(500).json({ success: false, error: 'Platform issuer not configured' });
+    }
 
     const client = await getClient();
     const sellerWallet = xrpl.Wallet.fromSeed(decrypt(sellerWalletRow.encrypted_seed));
@@ -276,23 +331,43 @@ router.post('/resell', authMiddleware, async (req, res) => {
       });
     }
 
-    const result = await resellTicket(
-      client, sellerWallet, buyerWallet,
-      ticket.token_id, resalePrice, issuerRow.value, metadata
-    );
+    const result = await resellTicket(client, sellerWallet, buyerWallet, ticket.token_id, resalePrice, issuerRow.value, metadata);
 
     // Decrement remaining resale count; unlimited (max_resales=0) stays at 0
     const newResaleCount = ticket.max_resales > 0 ? ticket.resale_count - 1 : 0;
 
-    // Update ticket
     db.prepare(
       'UPDATE tickets SET current_owner_id = ?, resale_count = ? WHERE id = ?'
     ).run(buyerId, newResaleCount, ticketId);
 
-    // Log transaction
     db.prepare(
       'INSERT INTO transactions (id, type, ticket_id, from_user_id, to_user_id, price, tx_hash) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(uuidv4(), 'RESELL', ticketId, req.user.id, buyerId, resalePrice, result.txHash);
+
+    // ── Sync to MongoDB ──
+    try {
+      await MongoTicket.findOneAndUpdate(
+        { tokenId: ticket.token_id },
+        {
+          ownerAddress: buyerWallet.address,
+          price: resalePrice,
+          resaleCount: newResaleCount,
+          listedForSale: false,
+          listingPrice: '0',
+        }
+      );
+      logger.mongoSync('Ticket', 'resell', ticket.token_id.slice(0, 16));
+    } catch (mongoErr) {
+      logger.error('MONGO_SYNC resell', mongoErr);
+    }
+
+    logger.resell({
+      sellerAddress: sellerWallet.address,
+      ticketId: ticket.token_id,
+      resalePrice,
+      txHash: result.txHash,
+      royaltyPaid: result.royaltyPaid,
+    });
 
     res.json({
       success: true,
@@ -301,14 +376,13 @@ router.post('/resell', authMiddleware, async (req, res) => {
       txHash: result.txHash,
     });
   } catch (err) {
-    console.error('Resell error:', err);
+    logger.error('TICKETS resell', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
 /**
  * POST /api/tickets/list-for-sale
- * List a ticket for sale on the marketplace.
  * Body: { ticketId, resalePrice }
  */
 router.post('/list-for-sale', authMiddleware, async (req, res) => {
@@ -330,7 +404,7 @@ router.post('/list-for-sale', authMiddleware, async (req, res) => {
     if (parseFloat(resalePrice) > maxPrice) {
       return res.status(400).json({
         success: false,
-        error: `Price exceeds maximum allowed resale price of ${ticket.max_resale_price} RLUSD`,
+        error: `Price exceeds the maximum allowed resale price of ${ticket.max_resale_price} RLUSD`,
       });
     }
 
@@ -349,6 +423,18 @@ router.post('/list-for-sale', authMiddleware, async (req, res) => {
 
     db.prepare('UPDATE tickets SET metadata_json = ? WHERE id = ?').run(JSON.stringify(metadata), ticketId);
 
+    // ── Sync to MongoDB ──
+    try {
+      await MongoTicket.findOneAndUpdate(
+        { sqliteId: ticketId },
+        { listedForSale: true, listingPrice: resalePrice }
+      );
+      logger.mongoSync('Ticket', 'list-for-sale', ticketId.slice(0, 16));
+    } catch (mongoErr) {
+      logger.error('MONGO_SYNC list-for-sale', mongoErr);
+    }
+
+    logger.info('TICKETS', `Listed ticket ${ticketId.slice(0, 8)}… for ${resalePrice} RLUSD`);
     res.json({ success: true, message: 'Ticket listed for sale' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -357,7 +443,6 @@ router.post('/list-for-sale', authMiddleware, async (req, res) => {
 
 /**
  * GET /api/tickets/marketplace
- * List all tickets currently for sale.
  */
 router.get('/marketplace', async (req, res) => {
   try {
@@ -379,7 +464,6 @@ router.get('/marketplace', async (req, res) => {
       ORDER BY e.date ASC
     `).all();
 
-    // Parse listing price from metadata
     const enriched = tickets.map(t => {
       const meta = JSON.parse(t.metadata_json || '{}');
       return {
@@ -398,27 +482,16 @@ router.get('/marketplace', async (req, res) => {
 
 /**
  * GET /api/tickets/:id/qr
- * Generate QR code for a ticket.
  */
 router.get('/:id/qr', authMiddleware, async (req, res) => {
   try {
     const db = getDb();
     const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(req.params.id);
-    if (!ticket) {
-      return res.status(404).json({ success: false, error: 'Ticket not found' });
-    }
+    if (!ticket) return res.status(404).json({ success: false, error: 'Ticket not found' });
 
-    // QR contains ticket verification data
-    const qrData = JSON.stringify({
-      ticketId: ticket.id,
-      tokenId: ticket.token_id,
-      seat: ticket.seat,
-      eventId: ticket.event_id,
-    });
-
+    const qrData = JSON.stringify({ ticketId: ticket.id, tokenId: ticket.token_id, seat: ticket.seat, eventId: ticket.event_id });
     const qrDataUrl = await QRCode.toDataURL(qrData, {
-      width: 300,
-      margin: 2,
+      width: 300, margin: 2,
       color: { dark: '#6366f1', light: '#0a0a0f' },
     });
 

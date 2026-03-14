@@ -202,7 +202,7 @@ export default function MyTicketsPage() {
                           />
                           <button className="btn btn-primary btn-sm" onClick={() => handleListForSale(t.id)}>List</button>
                         </div>
-                        <p className="list-hint">Max: {t.max_resale_price} RLUSD</p>
+                        <p className="list-hint">Max: {t.max_resale_price} XRP</p>
                       </div>
                     )}
                   </div>
