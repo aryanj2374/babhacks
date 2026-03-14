@@ -1,5 +1,7 @@
 /**
- * API helper — wraps fetch with JWT auth.
+ * API helper — wraps fetch with JWT auth and a 120-second timeout.
+ * Minting NFTs on XRPL can take up to ~30 seconds; the timeout prevents
+ * the browser from hanging indefinitely if the server drops the connection.
  */
 
 const BASE = '/api';
@@ -16,9 +18,22 @@ export async function api(endpoint, method = 'GET', body = null) {
   const opts = { method, headers };
   if (body) opts.body = JSON.stringify(body);
 
-  const res = await fetch(`${BASE}${endpoint}`, opts);
-  const data = await res.json();
-  return data;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 120_000);
+  opts.signal = controller.signal;
+
+  try {
+    const res = await fetch(`${BASE}${endpoint}`, opts);
+    const data = await res.json();
+    return data;
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      return { success: false, error: 'Request timed out. The XRPL transaction may still be processing — check back in a moment.' };
+    }
+    return { success: false, error: err.message };
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export function setToken(token) {

@@ -24,6 +24,72 @@ const xrpl = require('xrpl');
 const config = require('./config');
 const { encodeMetadata, decodeMetadata, getNFTokens, findNFToken, getSellOffers } = require('./utils');
 
+/**
+ * Submit a transaction and wait for validation.
+ *
+ * Uses autofill for Sequence and Fee, but then overwrites LastLedgerSequence
+ * with a fresh ledger_current RPC call + 100 ledger buffer. This bypasses any
+ * stale cached ledger index that autofill may hold, which is the root cause of
+ * "LastLedgerSequence < current ledger" (temMALFORMED) errors.
+ */
+async function submitWithBuffer(client, tx, wallet) {
+  // Autofill fills Sequence, Fee, NetworkID. It also sets LastLedgerSequence
+  // to validated+20, but we immediately override that below.
+  const prepared = await client.autofill(tx);
+
+  // Base LastLedgerSequence on getLedgerIndex() — the validated ledger — because
+  // that is the exact same value the xrpl.js polling loop compares against.
+  // Using ledger_current (open ledger) causes spurious expiry on the testnet
+  // when the two indexes diverge.
+  const validatedLedger = await client.getLedgerIndex();
+  prepared.LastLedgerSequence = validatedLedger + 100;
+
+  const { tx_blob, hash } = wallet.sign(prepared);
+
+  // Submit immediately and inspect the preliminary engine result.
+  const submitRes = await client.request({ command: 'submit', tx_blob });
+  const engineResult = submitRes.result.engine_result;
+
+  // tem/tef/tel errors mean the transaction is permanently invalid — throw fast
+  // instead of polling for 400+ seconds waiting for LLS to expire.
+  if (
+    engineResult.startsWith('tem') ||
+    engineResult.startsWith('tef') ||
+    engineResult.startsWith('tel')
+  ) {
+    throw new Error(
+      `Transaction rejected: ${engineResult} — ${submitRes.result.engine_result_message}`
+    );
+  }
+
+  // Poll for validation with a hard 60-second wall-clock timeout.
+  // tesSUCCESS / terQUEUED / ter* are all pending states that need polling.
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 3000));
+
+    // If LLS has passed we can stop — the tx will never land.
+    const currentLedger = await client.getLedgerIndex();
+    if (currentLedger > prepared.LastLedgerSequence) {
+      throw new Error(
+        `Transaction expired after LLS passed. Preliminary: ${engineResult}`
+      );
+    }
+
+    try {
+      const txRes = await client.request({ command: 'tx', transaction: hash });
+      if (txRes.result.validated) {
+        return txRes; // same shape as submitAndWait return value
+      }
+    } catch (e) {
+      // txnNotFound is normal while waiting — ignore and keep polling
+      if (e?.data?.error !== 'txnNotFound') throw e;
+    }
+  }
+
+  throw new Error('Transaction not validated within 60 seconds');
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // 1. MINT TICKET
 // ═══════════════════════════════════════════════════════════════════
@@ -63,8 +129,12 @@ async function mintTicket(client, organizerWallet, metadata) {
     mintedAt: new Date().toISOString(),
   };
 
-  // Encode metadata as hex for the NFT URI field
-  const uri = encodeMetadata(fullMetadata);
+  // XRPL NFT URI hard limit: 256 bytes (512 hex chars).
+  // minter (34-char address) and mintedAt (24-char timestamp) are already
+  // recorded on-chain in the transaction itself, so we exclude them from
+  // the URI to stay well under the byte limit.
+  const { minter: _m, mintedAt: _t, ...uriMetadata } = fullMetadata;
+  const uri = encodeMetadata(uriMetadata);
 
   // Build the NFTokenMint transaction
   const mintTx = {
@@ -82,7 +152,7 @@ async function mintTicket(client, organizerWallet, metadata) {
     NFTokenTaxon: config.DEFAULT_TAXON,
   };
 
-  const result = await client.submitAndWait(mintTx, { wallet: organizerWallet });
+  const result = await submitWithBuffer(client, mintTx, organizerWallet);
   const txResult = result.result.meta.TransactionResult;
   if (txResult !== 'tesSUCCESS') {
     throw new Error(`NFTokenMint failed: ${txResult}`);
@@ -184,7 +254,7 @@ async function buyTicket(client, buyerWallet, sellerWallet, tokenId, price, issu
     Flags: 1,
   };
 
-  const sellResult = await client.submitAndWait(sellOfferTx, { wallet: sellerWallet });
+  const sellResult = await submitWithBuffer(client, sellOfferTx, sellerWallet);
   if (sellResult.result.meta.TransactionResult !== 'tesSUCCESS') {
     throw new Error(`Sell offer failed: ${sellResult.result.meta.TransactionResult}`);
   }
@@ -204,7 +274,7 @@ async function buyTicket(client, buyerWallet, sellerWallet, tokenId, price, issu
     NFTokenSellOffer: sellOfferId,
   };
 
-  const acceptResult = await client.submitAndWait(acceptTx, { wallet: buyerWallet });
+  const acceptResult = await submitWithBuffer(client, acceptTx, buyerWallet);
   if (acceptResult.result.meta.TransactionResult !== 'tesSUCCESS') {
     throw new Error(`Accept offer failed: ${acceptResult.result.meta.TransactionResult}`);
   }
@@ -300,7 +370,7 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
     Flags: 1, // tfSellNFToken
   };
 
-  const sellResult = await client.submitAndWait(sellOfferTx, { wallet: sellerWallet });
+  const sellResult = await submitWithBuffer(client, sellOfferTx, sellerWallet);
   if (sellResult.result.meta.TransactionResult !== 'tesSUCCESS') {
     throw new Error(`Resale sell offer failed: ${sellResult.result.meta.TransactionResult}`);
   }
@@ -319,7 +389,7 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
     NFTokenSellOffer: sellOfferId,
   };
 
-  const acceptResult = await client.submitAndWait(acceptTx, { wallet: buyerWallet });
+  const acceptResult = await submitWithBuffer(client, acceptTx, buyerWallet);
   if (acceptResult.result.meta.TransactionResult !== 'tesSUCCESS') {
     throw new Error(`Resale accept failed: ${acceptResult.result.meta.TransactionResult}`);
   }
