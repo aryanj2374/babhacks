@@ -8,6 +8,7 @@ import MarketplacePage from './pages/MarketplacePage';
 import MyTicketsPage from './pages/MyTicketsPage';
 import MintPage from './pages/MintPage';
 import VerifyPage from './pages/VerifyPage';
+import SettingsPage from './pages/SettingsPage';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -48,6 +49,7 @@ export default function App() {
           <Route path="/my-tickets" element={<ProtectedRoute><MyTicketsPage /></ProtectedRoute>} />
           <Route path="/mint" element={<OrganizerRoute><MintPage /></OrganizerRoute>} />
           <Route path="/verify" element={<ProtectedRoute><VerifyPage /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to={user ? "/dashboard" : "/login"} />} />
         </Routes>
       </main>

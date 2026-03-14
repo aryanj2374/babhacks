@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { TicketIcon, LinkIcon } from '../components/Icons';
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -13,17 +14,24 @@ export default function LoginPage() {
     e.preventDefault();
     setError('');
     setLoading(true);
-    const data = await login(email, password);
-    if (!data.success) setError(data.error);
-    setLoading(false);
+    try {
+      const data = await login(email, password);
+      if (!data.success) setError(data.error);
+    } catch {
+      setError('An unexpected error occurred. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <div className="auth-page">
       <div className="auth-card">
         <div className="auth-header">
-          <span className="auth-icon">🎫</span>
-          <h1>Welcome Back</h1>
+          <div className="auth-logo">
+            <TicketIcon size={20} />
+          </div>
+          <h1>Welcome back</h1>
           <p>Sign in to your AntiScalp account</p>
         </div>
 
@@ -55,17 +63,18 @@ export default function LoginPage() {
           </div>
 
           <button type="submit" className="btn btn-primary btn-full" disabled={loading}>
-            {loading ? <span className="spinner" /> : null}
-            {loading ? 'Signing in...' : 'Sign In'}
+            {loading ? <><span className="spinner" />Signing in…</> : 'Sign In'}
           </button>
         </form>
 
         <div className="auth-footer">
-          Don't have an account? <Link to="/signup">Sign up</Link>
+          Don't have an account? <Link to="/signup">Create one</Link>
         </div>
       </div>
 
-      <div className="auth-badge">⛓️ Powered by XRP Ledger Testnet</div>
+      <div className="auth-badge">
+        <LinkIcon size={11} /> XRP Ledger Testnet
+      </div>
     </div>
   );
 }

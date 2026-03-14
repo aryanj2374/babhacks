@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { TicketIcon, MusicIcon, BuildingIcon, LinkIcon } from '../components/Icons';
 
 export default function SignupPage() {
   const { signup } = useAuth();
@@ -20,7 +21,7 @@ export default function SignupPage() {
     try {
       const data = await signup(form.email, form.password, form.displayName, form.role);
       if (!data.success) setError(data.error);
-    } catch (err) {
+    } catch {
       setError('An unexpected error occurred. Please try again.');
     } finally {
       setLoading(false);
@@ -33,9 +34,11 @@ export default function SignupPage() {
     <div className="auth-page">
       <div className="auth-card">
         <div className="auth-header">
-          <span className="auth-icon">🎫</span>
-          <h1>Create Account</h1>
-          <p>Join the anti-scalping ticketing revolution</p>
+          <div className="auth-logo">
+            <TicketIcon size={20} />
+          </div>
+          <h1>Create account</h1>
+          <p>Anti-scalping ticketing on the XRP Ledger</p>
         </div>
 
         <form onSubmit={handleSubmit} className="auth-form">
@@ -86,30 +89,33 @@ export default function SignupPage() {
                 className={`role-btn ${form.role === 'fan' ? 'active' : ''}`}
                 onClick={() => update('role', 'fan')}
               >
-                <span className="role-icon">🎵</span>
-                <span className="role-label">Fan</span>
-                <span className="role-desc">Buy & collect tickets</span>
+                <MusicIcon size={16} />
+                <div>
+                  <span className="role-label">Fan</span>
+                  <span className="role-desc">Buy &amp; collect tickets</span>
+                </div>
               </button>
               <button
                 type="button"
                 className={`role-btn ${form.role === 'organizer' ? 'active' : ''}`}
                 onClick={() => update('role', 'organizer')}
               >
-                <span className="role-icon">🏢</span>
-                <span className="role-label">Organizer</span>
-                <span className="role-desc">Create events & mint tickets</span>
+                <BuildingIcon size={16} />
+                <div>
+                  <span className="role-label">Organizer</span>
+                  <span className="role-desc">Create events &amp; mint</span>
+                </div>
               </button>
             </div>
           </div>
 
           <button type="submit" className="btn btn-primary btn-full" disabled={loading}>
-            {loading ? <span className="spinner" /> : null}
-            {loading ? 'Creating wallet...' : 'Create Account'}
+            {loading ? <><span className="spinner" />Creating wallet…</> : 'Create Account'}
           </button>
 
           {loading && (
             <div className="auth-info">
-              ⏳ Creating your XRPL wallet and funding with Testnet XRP. This may take 10–20 seconds...
+              Creating your XRPL wallet and funding with Testnet XRP. This may take 10–20 seconds…
             </div>
           )}
         </form>
@@ -119,7 +125,9 @@ export default function SignupPage() {
         </div>
       </div>
 
-      <div className="auth-badge">⛓️ Powered by XRP Ledger Testnet</div>
+      <div className="auth-badge">
+        <LinkIcon size={11} /> XRP Ledger Testnet
+      </div>
     </div>
   );
 }
