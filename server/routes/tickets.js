@@ -41,11 +41,12 @@ router.get('/my', authMiddleware, async (req, res) => {
 /**
  * POST /api/tickets/mint
  * Mint NFT tickets for an event (organizer only).
- * Body: { eventId, seats: [{ seat, originalPrice, maxResalePrice, maxResales }] }
+ * Body: { eventId, seats: [{ seat, originalPrice, maxResalePrice, maxResales }], royaltyPercent }
+ * royaltyPercent: 0–50 (percentage, e.g. 10 = 10%). Defaults to 10.
  */
 router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
   try {
-    const { eventId, seats } = req.body;
+    const { eventId, seats, royaltyPercent } = req.body;
     if (!eventId || !seats || !seats.length) {
       return res.status(400).json({ success: false, error: 'eventId and seats array are required' });
     }
@@ -64,6 +65,11 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
     const client = await getClient();
     const organizerWallet = xrpl.Wallet.fromSeed(decrypt(walletRow.encrypted_seed));
 
+    // Convert royaltyPercent (0–50) to XRPL TransferFee units (0–50000)
+    // XRPL scale: 50000=50%, 10000=10%, 1000=1%, 1=0.001%
+    const pct = Math.min(50, Math.max(0, parseFloat(royaltyPercent) || 10));
+    const royaltyBps = Math.round(pct * 1000);
+
     const mintedTickets = [];
 
     for (const seatInfo of seats) {
@@ -77,7 +83,7 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
         maxResales: parseInt(seatInfo.maxResales) || 3,
       };
 
-      const result = await mintTicket(client, organizerWallet, metadata);
+      const result = await mintTicket(client, organizerWallet, metadata, royaltyBps);
       await sleep(1500);
 
       const ticketId = uuidv4();

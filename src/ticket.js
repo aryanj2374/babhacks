@@ -120,7 +120,7 @@ async function submitWithBuffer(client, tx, wallet) {
  *   @param {number} [metadata.resaleCount=0] - Current resale count (starts at 0)
  * @returns {Object} { tokenId, txHash, metadata }
  */
-async function mintTicket(client, organizerWallet, metadata) {
+async function mintTicket(client, organizerWallet, metadata, royaltyBps = config.DEFAULT_ROYALTY_BPS) {
   // Ensure resaleCount starts at 0
   const fullMetadata = {
     ...metadata,
@@ -133,7 +133,7 @@ async function mintTicket(client, organizerWallet, metadata) {
   // minter (34-char address) and mintedAt (24-char timestamp) are already
   // recorded on-chain in the transaction itself, so we exclude them from
   // the URI to stay well under the byte limit.
-  const { minter: _m, mintedAt: _t, ...uriMetadata } = fullMetadata;
+  const { minter: _m, mintedAt: _t, ...uriMetadata } = { ...fullMetadata, royaltyBps };
   const uri = encodeMetadata(uriMetadata);
 
   // Build the NFTokenMint transaction
@@ -147,7 +147,7 @@ async function mintTicket(client, organizerWallet, metadata) {
     Flags: 8 + 1,
     // TransferFee: Royalty in basis points, auto-collected by XRPL on every resale
     // This is enforced at the protocol level — no smart contract needed!
-    TransferFee: config.DEFAULT_ROYALTY_BPS,
+    TransferFee: royaltyBps,
     // NFTokenTaxon: Groups all tickets for this event together
     NFTokenTaxon: config.DEFAULT_TAXON,
   };
@@ -395,8 +395,10 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
   }
 
   // Calculate royalty that was automatically paid
-  const royaltyPercent = config.DEFAULT_ROYALTY_BPS / 100;
-  const royaltyAmount = (proposedPrice * config.DEFAULT_ROYALTY_BPS / 10000).toFixed(2);
+  // XRPL scale: 50000=50%, 10000=10%, 1000=1% (1 unit = 0.001%)
+  const effectiveBps = ticketMetadata.royaltyBps ?? config.DEFAULT_ROYALTY_BPS;
+  const royaltyPercent = effectiveBps / 1000;
+  const royaltyAmount = (proposedPrice * effectiveBps / 100000).toFixed(2);
 
   console.log(`  ✅ Ticket resold! NFT transferred to ${buyerWallet.address}`);
   console.log(`     💰 Royalty auto-paid to organizer: ${royaltyAmount} RLUSD (${royaltyPercent}%)`);
