@@ -88,11 +88,12 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
 
       const ticketId = uuidv4();
       db.prepare(`
-        INSERT INTO tickets (id, event_id, token_id, seat, original_price, max_resale_price, max_resales, metadata_json, tx_hash, current_owner_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO tickets (id, event_id, token_id, seat, original_price, max_resale_price, max_resales, resale_count, metadata_json, tx_hash, current_owner_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         ticketId, eventId, result.tokenId, metadata.seat,
         metadata.originalPrice, metadata.maxResalePrice, metadata.maxResales,
+        metadata.maxResales, // resale_count starts equal to max_resales (remaining resales)
         JSON.stringify(result.metadata), result.txHash, req.user.id
       );
 
@@ -203,17 +204,29 @@ router.post('/resell', authMiddleware, async (req, res) => {
     const buyerWallet = xrpl.Wallet.fromSeed(decrypt(buyerWalletRow.encrypted_seed));
 
     const metadata = JSON.parse(ticket.metadata_json || '{}');
-    metadata.resaleCount = ticket.resale_count;
+    // resale_count is remaining resales (countdown). 0 = no resales left.
+    metadata.resalesRemaining = ticket.resale_count;
+
+    // Pre-check before hitting XRPL: block immediately if no resales remain
+    if (ticket.max_resales > 0 && ticket.resale_count <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: `This ticket has no resales remaining (0 / ${ticket.max_resales})`,
+      });
+    }
 
     const result = await resellTicket(
       client, sellerWallet, buyerWallet,
       ticket.token_id, resalePrice, issuerRow.value, metadata
     );
 
+    // Decrement remaining resale count; unlimited (max_resales=0) stays at 0
+    const newResaleCount = ticket.max_resales > 0 ? ticket.resale_count - 1 : 0;
+
     // Update ticket
     db.prepare(
       'UPDATE tickets SET current_owner_id = ?, resale_count = ? WHERE id = ?'
-    ).run(buyerId, result.newResaleCount, ticketId);
+    ).run(buyerId, newResaleCount, ticketId);
 
     // Log transaction
     db.prepare(
@@ -251,12 +264,20 @@ router.post('/list-for-sale', authMiddleware, async (req, res) => {
       return res.status(403).json({ success: false, error: 'You do not own this ticket' });
     }
 
-    // Anti-scalping check
+    // Anti-scalping check: price cap
     const maxPrice = parseFloat(ticket.max_resale_price);
     if (parseFloat(resalePrice) > maxPrice) {
       return res.status(400).json({
         success: false,
         error: `Price exceeds maximum allowed resale price of ${ticket.max_resale_price} RLUSD`,
+      });
+    }
+
+    // Anti-scalping check: resale count (resale_count is remaining, 0 = blocked)
+    if (ticket.max_resales > 0 && ticket.resale_count <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: `This ticket has no resales remaining (0 / ${ticket.max_resales})`,
       });
     }
 

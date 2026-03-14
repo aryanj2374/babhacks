@@ -170,7 +170,7 @@ export default function MarketplacePage() {
                     )}
                   </div>
                   <div className="mt-anti-scalp">
-                    Max {t.max_resale_price} RLUSD · {t.max_resales - t.resale_count} resales left
+                    Max {t.max_resale_price} RLUSD · {t.max_resales === 0 ? 'Unlimited' : t.resale_count} resales left
                   </div>
                 </div>
               ))}

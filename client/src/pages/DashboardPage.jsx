@@ -40,11 +40,12 @@ export default function DashboardPage() {
   const redeemedCount = tickets.filter(t => t.redeemed).length;
 
   // Build activity feed from tickets
+  // resale_count is remaining resales (counts down). If it's less than max_resales, it was resold.
   const activity = tickets.slice(0, 6).map(t => ({
-    type: t.resale_count > 0 ? 'buy' : 'mint',
+    type: t.max_resales > 0 && t.resale_count < t.max_resales ? 'buy' : 'mint',
     title: t.event_name,
     sub: `${t.seat} · ${new Date(t.event_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
-    tag: t.resale_count > 0 ? 'Purchased' : 'Minted',
+    tag: t.max_resales > 0 && t.resale_count < t.max_resales ? 'Purchased' : 'Minted',
   }));
 
   return (

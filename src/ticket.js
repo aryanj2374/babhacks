@@ -332,12 +332,13 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
     );
   }
 
-  // ── Anti-Scalping Check 2: Resale Count Limit ──
+  // ── Anti-Scalping Check 2: Resale Count Limit (countdown: remaining → 0) ──
   const maxResales = ticketMetadata.maxResales || 0;
-  const currentResales = ticketMetadata.resaleCount || 0;
-  if (maxResales > 0 && currentResales >= maxResales) {
+  // resalesRemaining counts down from maxResales to 0; 0 means no resales left
+  const resalesRemaining = ticketMetadata.resalesRemaining ?? ticketMetadata.maxResales ?? 0;
+  if (maxResales > 0 && resalesRemaining <= 0) {
     throw new Error(
-      `🚫 ANTI-SCALPING: This ticket has reached the maximum number of resales (${maxResales})`
+      `🚫 ANTI-SCALPING: This ticket has no resales remaining (0 / ${maxResales})`
     );
   }
 
@@ -351,7 +352,7 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
 
   console.log(`  🔍 Anti-scalping checks passed:`);
   console.log(`     Price: ${resalePrice}/${ticketMetadata.maxResalePrice} RLUSD ✓`);
-  console.log(`     Resales: ${currentResales + 1}/${maxResales || '∞'} ✓`);
+  console.log(`     Resales remaining: ${resalesRemaining - 1}/${maxResales || '∞'} ✓`);
 
   // ── Execute the resale using XRPL NFT offer primitives ──
   // Same flow as buyTicket, but with anti-scalping validation done above
@@ -408,7 +409,7 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
     tokenId,
     resalePrice,
     royaltyPaid: royaltyAmount,
-    newResaleCount: currentResales + 1,
+    newResaleCount: maxResales > 0 ? resalesRemaining - 1 : 0,
   };
 }
 

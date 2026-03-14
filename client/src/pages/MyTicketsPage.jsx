@@ -55,7 +55,7 @@ export default function MyTicketsPage() {
 
   const validCount = tickets.filter(t => !t.redeemed).length;
   const redeemedCount = tickets.filter(t => t.redeemed).length;
-  const listedCount = tickets.filter(t => !t.redeemed && t.resale_count < t.max_resales).length;
+  const listedCount = tickets.filter(t => !t.redeemed && (t.resale_count > 0 || t.max_resales === 0)).length;
 
   const colStyle = { fontSize: '0.62rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.9px', color: 'var(--text-muted)' };
 
@@ -139,7 +139,7 @@ export default function MyTicketsPage() {
                     <button className="btn btn-outline btn-sm" onClick={() => loadQR(t.id)}>
                       {qrCodes[t.id] ? <><XCircleIcon size={12} />QR</> : <><QrCodeIcon size={12} />QR</>}
                     </button>
-                    {!t.redeemed && t.resale_count < t.max_resales && (
+                    {!t.redeemed && (t.resale_count > 0 || t.max_resales === 0) && (
                       <button
                         className="btn btn-outline btn-sm"
                         onClick={() => { setListing(listing === t.id ? null : t.id); if (expanded !== t.id) setExpanded(t.id); }}
@@ -165,7 +165,7 @@ export default function MyTicketsPage() {
                             ['Venue', t.event_venue || 'TBD'],
                             ['Price Paid', `${t.original_price} RLUSD`],
                             ['Max Resale', `${t.max_resale_price} RLUSD`],
-                            ['Resales', `${t.resale_count} / ${t.max_resales}`],
+                            ['Resales Left', t.max_resales === 0 ? 'Unlimited' : `${t.resale_count} / ${t.max_resales}`],
                           ].map(([label, val]) => (
                             <div key={label} className="detail-row">
                               <span className="detail-label">{label}</span>

@@ -232,8 +232,8 @@ export default function MintPage() {
                         <div className="tpc-val">{previewSeat.maxResalePrice || '—'} <span style={{ fontSize: '0.62rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>RLUSD</span></div>
                       </div>
                       <div className="tpc-field">
-                        <div className="tpc-label">Resales</div>
-                        <div className="tpc-val">0 / {previewSeat.maxResales || '—'}</div>
+                        <div className="tpc-label">Resales Left</div>
+                        <div className="tpc-val">{previewSeat.maxResales || '—'} / {previewSeat.maxResales || '—'}</div>
                       </div>
                     </div>
                     <div className="tpc-tear" />
