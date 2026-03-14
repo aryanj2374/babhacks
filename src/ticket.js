@@ -141,13 +141,12 @@ async function mintTicket(client, organizerWallet, metadata, royaltyBps = config
     Account: organizerWallet.address,
     URI: uri,
     // Flags: tfTransferable (8) + tfBurnable (1) = 9
-    // tfTransferable allows secondary market sales
-    // tfBurnable allows organizer to burn expired/invalid tickets
     Flags: 8 + 1,
-    // TransferFee: Royalty in basis points, auto-collected by XRPL on every resale
-    // This is enforced at the protocol level — no smart contract needed!
-    TransferFee: royaltyBps,
-    // NFTokenTaxon: Groups all tickets for this event together
+    // TransferFee: 0 — royalty is enforced at the application layer.
+    // XRPL's built-in TransferFee adds the fee ON TOP of the sale price (buyer pays
+    // extra), which is not the desired UX. Instead, we calculate profit-based royalty
+    // in resellTicket() and send a separate Payment from the seller to the organizer.
+    TransferFee: 0,
     NFTokenTaxon: config.DEFAULT_TAXON,
   };
 
@@ -305,15 +304,20 @@ async function buyTicket(client, buyerWallet, sellerWallet, tokenId, price) {
 /**
  * Resell a ticket on the secondary market with OpenTix enforcement.
  *
- * Amount is native XRP in drops — same rules as buyTicket.
+ * Royalty model (application-layer, profit-based):
+ *   profit       = max(0, resalePrice - sellerPaidPrice)
+ *   royalty      = profit * (royaltyBps / 100000)
+ *   seller nets  = resalePrice - royalty
+ *   organizer    = +royalty  (via separate Payment tx from seller)
+ *   buyer pays   = resalePrice (no extra fee on top)
  *
  * @param {Client} client
  * @param {Wallet} sellerWallet
  * @param {Wallet} buyerWallet
- * @param {string} tokenId       - NFTokenID
- * @param {string} resalePrice   - Price in XRP (e.g. "45")
- * @param {Object} ticketMetadata - { maxResalePrice, maxResales, resaleCount, eventDate }
- * @returns {Object} { txHash, tokenId, resalePrice, royaltyPaid, newResaleCount }
+ * @param {string} tokenId        - NFTokenID
+ * @param {string} resalePrice    - Price in XRP (e.g. "45")
+ * @param {Object} ticketMetadata - { maxResalePrice, eventDate, royaltyBps, sellerPaidPrice, organizerAddress }
+ * @returns {Object} { txHash, tokenId, resalePrice, royaltyPaid }
  */
 async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePrice, ticketMetadata) {
   // ── OpenTix Check 1: Max Resale Price ──
@@ -331,19 +335,25 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
     throw new Error(`Ticket's event has already passed (${ticketMetadata.eventDate})`);
   }
 
-  // Convert XRP → drops string
+  // ── Profit-based royalty calculation ──
+  const sellerPaidPrice = parseFloat(ticketMetadata.sellerPaidPrice || '0');
+  const profit = Math.max(0, proposedPrice - sellerPaidPrice);
+  const royaltyBps = ticketMetadata.royaltyBps ?? config.DEFAULT_ROYALTY_BPS;
+  const royaltyXrp = profit * royaltyBps / 100000;
+  const royaltyDrops = Math.floor(royaltyXrp * 1_000_000);
+
   const amountDrops = xrpl.xrpToDrops(String(resalePrice));
 
-  console.log(`[XRPL] NFTokenCreateOffer (resell) | tokenId=${tokenId.slice(0, 16)}… | amount=${amountDrops} drops (${resalePrice} XRP)`);
+  console.log(`[XRPL] NFTokenCreateOffer (resell) | tokenId=${tokenId.slice(0, 16)}… | amount=${amountDrops} drops (${resalePrice} XRP) | profit=${profit} XRP | royalty=${royaltyXrp} XRP`);
 
-  // Step 1: Seller creates a sell offer priced in XRP drops
+  // Step 1: Seller creates sell offer (buyer pays exact resalePrice — no TransferFee surcharge)
   const sellOfferTx = {
     TransactionType: 'NFTokenCreateOffer',
     Account: sellerWallet.address,
     NFTokenID: tokenId,
-    Amount: amountDrops,       // ← drops string, e.g. "45000000"
+    Amount: amountDrops,
     Destination: buyerWallet.address,
-    Flags: 1,                  // tfSellNFToken
+    Flags: 1, // tfSellNFToken
   };
 
   const sellResult = await submitWithBuffer(client, sellOfferTx, sellerWallet);
@@ -354,7 +364,7 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
   const sellOfferId = extractOfferId(sellResult);
   console.log(`[XRPL] Resale sell offer created: ${sellOfferId}`);
 
-  // Step 2: Buyer accepts — XRPL atomically transfers NFT + XRP + royalty to minter
+  // Step 2: Buyer accepts — atomic NFT + XRP swap; seller receives full resalePrice
   const acceptTx = {
     TransactionType: 'NFTokenAcceptOffer',
     Account: buyerWallet.address,
@@ -366,16 +376,37 @@ async function resellTicket(client, sellerWallet, buyerWallet, tokenId, resalePr
     throw new Error(`Resale accept failed: ${acceptResult.result.meta.TransactionResult}`);
   }
 
-  // Royalty is enforced by XRPL TransferFee — calculated here for display only
-  const effectiveBps = ticketMetadata.royaltyBps ?? config.DEFAULT_ROYALTY_BPS;
-  const royaltyAmount = (proposedPrice * effectiveBps / 100000).toFixed(4);
-  console.log(`[XRPL] Ticket resold! NFT ${tokenId.slice(0, 16)}… → ${buyerWallet.address.slice(0, 12)}… | royalty ~${royaltyAmount} XRP`);
+  console.log(`[XRPL] Ticket resold! NFT ${tokenId.slice(0, 16)}… → ${buyerWallet.address.slice(0, 12)}…`);
+
+  // Step 3: Seller pays profit-based royalty to organizer
+  let royaltyPaid = '0';
+  if (royaltyDrops > 0 && ticketMetadata.organizerAddress) {
+    console.log(`[XRPL] Sending royalty ${royaltyXrp} XRP (${royaltyDrops} drops) from seller → organizer ${ticketMetadata.organizerAddress.slice(0, 12)}…`);
+    const royaltyTx = {
+      TransactionType: 'Payment',
+      Account: sellerWallet.address,
+      Destination: ticketMetadata.organizerAddress,
+      Amount: royaltyDrops.toString(),
+    };
+
+    try {
+      const royaltyResult = await submitWithBuffer(client, royaltyTx, sellerWallet);
+      if (royaltyResult.result.meta.TransactionResult === 'tesSUCCESS') {
+        royaltyPaid = royaltyXrp.toFixed(6);
+        console.log(`[XRPL] Royalty paid: ${royaltyPaid} XRP → organizer`);
+      } else {
+        console.warn(`[XRPL] Royalty payment failed: ${royaltyResult.result.meta.TransactionResult}`);
+      }
+    } catch (err) {
+      console.warn(`[XRPL] Royalty payment error: ${err.message}`);
+    }
+  }
 
   return {
     txHash: acceptResult.result.hash,
     tokenId,
     resalePrice,
-    royaltyPaid: royaltyAmount,
+    royaltyPaid,
   };
 }
 
