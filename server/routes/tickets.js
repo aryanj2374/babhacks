@@ -14,12 +14,10 @@ const { authMiddleware, requireOrganizer } = require('../auth');
 const { decrypt } = require('../crypto');
 const { getClient } = require('../xrplClient');
 const { mintTicket, buyTicket, resellTicket } = require('../../src/ticket');
-const { getRLUSDBalance } = require('../../src/wallet');
 const { sleep } = require('../../src/utils');
 
 /**
  * GET /api/tickets/my
- * List tickets owned by current user.
  */
 router.get('/my', authMiddleware, async (req, res) => {
   try {
@@ -31,7 +29,6 @@ router.get('/my', authMiddleware, async (req, res) => {
       WHERE t.current_owner_id = ?
       ORDER BY e.date ASC
     `).all(req.user.id);
-
     res.json({ success: true, tickets });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -53,14 +50,10 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
 
     const db = getDb();
     const event = db.prepare('SELECT * FROM events WHERE id = ? AND organizer_id = ?').get(eventId, req.user.id);
-    if (!event) {
-      return res.status(404).json({ success: false, error: 'Event not found or not yours' });
-    }
+    if (!event) return res.status(404).json({ success: false, error: 'Event not found or not yours' });
 
     const walletRow = db.prepare('SELECT * FROM wallets WHERE user_id = ?').get(req.user.id);
-    if (!walletRow) {
-      return res.status(400).json({ success: false, error: 'No wallet found' });
-    }
+    if (!walletRow) return res.status(400).json({ success: false, error: 'No wallet found' });
 
     const client = await getClient();
     const organizerWallet = xrpl.Wallet.fromSeed(decrypt(walletRow.encrypted_seed));
@@ -77,8 +70,8 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
         eventId: event.id,
         eventName: event.name,
         seat: seatInfo.seat,
-        originalPrice: seatInfo.originalPrice || '100',
-        maxResalePrice: seatInfo.maxResalePrice || '150',
+        originalPrice: seatInfo.originalPrice || '10',
+        maxResalePrice: seatInfo.maxResalePrice || '15',
         eventDate: event.date,
         maxResales: parseInt(seatInfo.maxResales) || 3,
       };
@@ -112,58 +105,38 @@ router.post('/mint', authMiddleware, requireOrganizer, async (req, res) => {
 
 /**
  * POST /api/tickets/buy
- * Buy a ticket. Body: { ticketId }
+ * Body: { ticketId }
  */
 router.post('/buy', authMiddleware, async (req, res) => {
   try {
     const { ticketId } = req.body;
-    if (!ticketId) {
-      return res.status(400).json({ success: false, error: 'ticketId is required' });
-    }
+    if (!ticketId) return res.status(400).json({ success: false, error: 'ticketId is required' });
 
     const db = getDb();
     const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
-    if (!ticket) {
-      return res.status(404).json({ success: false, error: 'Ticket not found' });
-    }
+    if (!ticket) return res.status(404).json({ success: false, error: 'Ticket not found' });
     if (ticket.current_owner_id === req.user.id) {
       return res.status(400).json({ success: false, error: 'You already own this ticket' });
     }
 
-    // Get buyer and seller wallets
     const buyerWalletRow = db.prepare('SELECT * FROM wallets WHERE user_id = ?').get(req.user.id);
     const sellerWalletRow = db.prepare('SELECT * FROM wallets WHERE user_id = ?').get(ticket.current_owner_id);
     if (!buyerWalletRow || !sellerWalletRow) {
       return res.status(400).json({ success: false, error: 'Wallet not found' });
     }
 
-    const issuerRow = db.prepare("SELECT value FROM platform_config WHERE key = 'issuer_address'").get();
-    if (!issuerRow) {
-      return res.status(500).json({ success: false, error: 'Platform issuer not configured' });
-    }
-
     const client = await getClient();
     const buyerWallet = xrpl.Wallet.fromSeed(decrypt(buyerWalletRow.encrypted_seed));
     const sellerWallet = xrpl.Wallet.fromSeed(decrypt(sellerWalletRow.encrypted_seed));
 
-    const result = await buyTicket(
-      client, buyerWallet, sellerWallet,
-      ticket.token_id, ticket.original_price, issuerRow.value
-    );
+    const result = await buyTicket(client, buyerWallet, sellerWallet, ticket.token_id, ticket.original_price);
 
-    // Update ownership
     db.prepare('UPDATE tickets SET current_owner_id = ? WHERE id = ?').run(req.user.id, ticketId);
-
-    // Log transaction
     db.prepare(
       'INSERT INTO transactions (id, type, ticket_id, from_user_id, to_user_id, price, tx_hash) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(uuidv4(), 'BUY', ticketId, ticket.current_owner_id, req.user.id, ticket.original_price, result.txHash);
 
-    res.json({
-      success: true,
-      message: `Ticket purchased for ${ticket.original_price} RLUSD`,
-      txHash: result.txHash,
-    });
+    res.json({ success: true, message: `Ticket purchased for ${ticket.original_price} XRP`, txHash: result.txHash });
   } catch (err) {
     console.error('Buy error:', err);
     res.status(500).json({ success: false, error: err.message });
@@ -172,7 +145,7 @@ router.post('/buy', authMiddleware, async (req, res) => {
 
 /**
  * POST /api/tickets/resell
- * Resell a ticket. Body: { ticketId, buyerId, resalePrice }
+ * Body: { ticketId, buyerId, resalePrice }
  */
 router.post('/resell', authMiddleware, async (req, res) => {
   try {
@@ -183,9 +156,7 @@ router.post('/resell', authMiddleware, async (req, res) => {
 
     const db = getDb();
     const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
-    if (!ticket) {
-      return res.status(404).json({ success: false, error: 'Ticket not found' });
-    }
+    if (!ticket) return res.status(404).json({ success: false, error: 'Ticket not found' });
     if (ticket.current_owner_id !== req.user.id) {
       return res.status(403).json({ success: false, error: 'You do not own this ticket' });
     }
@@ -196,8 +167,6 @@ router.post('/resell', authMiddleware, async (req, res) => {
       return res.status(400).json({ success: false, error: 'Wallet not found' });
     }
 
-    const issuerRow = db.prepare("SELECT value FROM platform_config WHERE key = 'issuer_address'").get();
-
     const client = await getClient();
     const sellerWallet = xrpl.Wallet.fromSeed(decrypt(sellerWalletRow.encrypted_seed));
     const buyerWallet = xrpl.Wallet.fromSeed(decrypt(buyerWalletRow.encrypted_seed));
@@ -205,27 +174,14 @@ router.post('/resell', authMiddleware, async (req, res) => {
     const metadata = JSON.parse(ticket.metadata_json || '{}');
     metadata.resaleCount = ticket.resale_count;
 
-    const result = await resellTicket(
-      client, sellerWallet, buyerWallet,
-      ticket.token_id, resalePrice, issuerRow.value, metadata
-    );
+    const result = await resellTicket(client, sellerWallet, buyerWallet, ticket.token_id, resalePrice, metadata);
 
-    // Update ticket
-    db.prepare(
-      'UPDATE tickets SET current_owner_id = ?, resale_count = ? WHERE id = ?'
-    ).run(buyerId, result.newResaleCount, ticketId);
-
-    // Log transaction
+    db.prepare('UPDATE tickets SET current_owner_id = ?, resale_count = ? WHERE id = ?').run(buyerId, result.newResaleCount, ticketId);
     db.prepare(
       'INSERT INTO transactions (id, type, ticket_id, from_user_id, to_user_id, price, tx_hash) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(uuidv4(), 'RESELL', ticketId, req.user.id, buyerId, resalePrice, result.txHash);
 
-    res.json({
-      success: true,
-      message: `Ticket resold for ${resalePrice} RLUSD`,
-      royaltyPaid: result.royaltyPaid,
-      txHash: result.txHash,
-    });
+    res.json({ success: true, message: `Ticket resold for ${resalePrice} XRP`, txHash: result.txHash });
   } catch (err) {
     console.error('Resell error:', err);
     res.status(500).json({ success: false, error: err.message });
@@ -234,7 +190,6 @@ router.post('/resell', authMiddleware, async (req, res) => {
 
 /**
  * POST /api/tickets/list-for-sale
- * List a ticket for sale on the marketplace.
  * Body: { ticketId, resalePrice }
  */
 router.post('/list-for-sale', authMiddleware, async (req, res) => {
@@ -251,22 +206,19 @@ router.post('/list-for-sale', authMiddleware, async (req, res) => {
       return res.status(403).json({ success: false, error: 'You do not own this ticket' });
     }
 
-    // Anti-scalping check
     const maxPrice = parseFloat(ticket.max_resale_price);
     if (parseFloat(resalePrice) > maxPrice) {
       return res.status(400).json({
         success: false,
-        error: `Price exceeds maximum allowed resale price of ${ticket.max_resale_price} RLUSD`,
+        error: `Price exceeds the maximum allowed resale price of ${ticket.max_resale_price} XRP`,
       });
     }
 
-    // Store listing info in metadata
     const metadata = JSON.parse(ticket.metadata_json || '{}');
     metadata.listedForSale = true;
     metadata.listingPrice = resalePrice;
 
     db.prepare('UPDATE tickets SET metadata_json = ? WHERE id = ?').run(JSON.stringify(metadata), ticketId);
-
     res.json({ success: true, message: 'Ticket listed for sale' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -275,13 +227,10 @@ router.post('/list-for-sale', authMiddleware, async (req, res) => {
 
 /**
  * GET /api/tickets/marketplace
- * List all tickets currently for sale.
  */
 router.get('/marketplace', async (req, res) => {
   try {
     const db = getDb();
-    // Get tickets listed for sale (metadata_json contains listedForSale:true)
-    // Also show tickets from organizers that haven't been bought yet
     const tickets = db.prepare(`
       SELECT t.*, e.name as event_name, e.date as event_date, e.venue as event_venue,
              u.display_name as owner_name, u.role as owner_role
@@ -293,14 +242,9 @@ router.get('/marketplace', async (req, res) => {
       ORDER BY e.date ASC
     `).all();
 
-    // Parse listing price from metadata
     const enriched = tickets.map(t => {
       const meta = JSON.parse(t.metadata_json || '{}');
-      return {
-        ...t,
-        listingPrice: meta.listingPrice || t.original_price,
-        isResale: t.resale_count > 0,
-      };
+      return { ...t, listingPrice: meta.listingPrice || t.original_price, isResale: t.resale_count > 0 };
     });
 
     res.json({ success: true, tickets: enriched });
@@ -311,27 +255,16 @@ router.get('/marketplace', async (req, res) => {
 
 /**
  * GET /api/tickets/:id/qr
- * Generate QR code for a ticket.
  */
 router.get('/:id/qr', authMiddleware, async (req, res) => {
   try {
     const db = getDb();
     const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(req.params.id);
-    if (!ticket) {
-      return res.status(404).json({ success: false, error: 'Ticket not found' });
-    }
+    if (!ticket) return res.status(404).json({ success: false, error: 'Ticket not found' });
 
-    // QR contains ticket verification data
-    const qrData = JSON.stringify({
-      ticketId: ticket.id,
-      tokenId: ticket.token_id,
-      seat: ticket.seat,
-      eventId: ticket.event_id,
-    });
-
+    const qrData = JSON.stringify({ ticketId: ticket.id, tokenId: ticket.token_id, seat: ticket.seat, eventId: ticket.event_id });
     const qrDataUrl = await QRCode.toDataURL(qrData, {
-      width: 300,
-      margin: 2,
+      width: 300, margin: 2,
       color: { dark: '#6366f1', light: '#0a0a0f' },
     });
 

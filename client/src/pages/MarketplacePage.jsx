@@ -25,7 +25,7 @@ export default function MarketplacePage() {
   }
 
   async function handleBuy(ticket) {
-    if (!confirm(`Buy ticket ${ticket.seat} for ${ticket.listingPrice} RLUSD?`)) return;
+    if (!confirm(`Buy ticket ${ticket.seat} for ${ticket.listingPrice} XRP?`)) return;
     setBuying(ticket.id);
     setMessage(null);
     const data = await api('/tickets/buy', 'POST', { ticketId: ticket.id });
@@ -152,7 +152,7 @@ export default function MarketplacePage() {
                   <div className="mt-card-footer">
                     <div>
                       <span className="price-value">{t.listingPrice}</span>
-                      <span className="price-unit">RLUSD</span>
+                      <span className="price-unit">XRP</span>
                     </div>
                     {t.current_owner_id !== user?.id ? (
                       <button
@@ -170,7 +170,7 @@ export default function MarketplacePage() {
                     )}
                   </div>
                   <div className="mt-anti-scalp">
-                    Max {t.max_resale_price} RLUSD · {t.max_resales - t.resale_count} resales left
+                    Max {t.max_resale_price} XRP · {t.max_resales - t.resale_count} resales left
                   </div>
                 </div>
               ))}

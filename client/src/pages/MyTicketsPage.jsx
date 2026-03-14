@@ -163,8 +163,8 @@ export default function MyTicketsPage() {
                         <div style={{ padding: '8px 10px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 12px' }}>
                           {[
                             ['Venue', t.event_venue || 'TBD'],
-                            ['Price Paid', `${t.original_price} RLUSD`],
-                            ['Max Resale', `${t.max_resale_price} RLUSD`],
+                            ['Price Paid', `${t.original_price} XRP`],
+                            ['Max Resale', `${t.max_resale_price} XRP`],
                             ['Resales', `${t.resale_count} / ${t.max_resales}`],
                           ].map(([label, val]) => (
                             <div key={label} className="detail-row">
@@ -202,7 +202,7 @@ export default function MyTicketsPage() {
                           />
                           <button className="btn btn-primary btn-sm" onClick={() => handleListForSale(t.id)}>List</button>
                         </div>
-                        <p className="list-hint">Max: {t.max_resale_price} RLUSD</p>
+                        <p className="list-hint">Max: {t.max_resale_price} XRP</p>
                       </div>
                     )}
                   </div>
