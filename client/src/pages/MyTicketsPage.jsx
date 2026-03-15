@@ -189,7 +189,7 @@ export default function MyTicketsPage() {
                     )}
 
                     {listing === t.id && (
-                      <div style={{ minWidth: '170px' }}>
+                      <div style={{ minWidth: '200px' }}>
                         <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: 600, marginBottom: '6px' }}>Set Resale Price</div>
                         <div className="list-form">
                           <input
@@ -202,6 +202,23 @@ export default function MyTicketsPage() {
                           <button className="btn btn-primary btn-sm" onClick={() => handleListForSale(t.id)}>List</button>
                         </div>
                         <p className="list-hint">Max: {t.max_resale_price} XRP</p>
+                        {listPrice && parseFloat(listPrice) > 0 && (
+                          <div style={{ marginTop: '6px', padding: '6px 8px', background: 'rgba(99,102,241,0.06)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', fontSize: '0.68rem' }}>
+                            <div style={{ color: 'var(--text-muted)', marginBottom: '3px' }}>Royalty breakdown ({t.royalty_percent}%)</div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                              <span>Buyer pays</span>
+                              <span style={{ fontFamily: 'var(--font-mono)' }}>{parseFloat(listPrice).toFixed(2)} XRP</span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                              <span>Royalty → organizer</span>
+                              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-primary)' }}>{(parseFloat(listPrice) * t.royalty_percent / 100).toFixed(2)} XRP</span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600 }}>
+                              <span>You receive</span>
+                              <span style={{ fontFamily: 'var(--font-mono)' }}>{(parseFloat(listPrice) - parseFloat(listPrice) * t.royalty_percent / 100).toFixed(2)} XRP</span>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

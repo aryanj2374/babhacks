@@ -40,6 +40,7 @@ router.get('/my', authMiddleware, async (req, res) => {
       event_name: t.eventId?.name || '',
       event_date: t.eventId?.date || '',
       event_venue: t.eventId?.venue || '',
+      royalty_percent: t.eventId?.royaltyPercent ?? 10,
     }));
 
     res.json({ success: true, tickets: result });
@@ -166,12 +167,11 @@ router.post('/buy', authMiddleware, async (req, res) => {
       const metadata = {
         maxResalePrice: ticket.maxResalePrice,
         eventDate: ticket.eventId?.date,
-        royaltyBps: Math.round((ticket.eventId?.royaltyPercent ?? 10) * 1000),
-        sellerPaidPrice: ticket.price,
+        royaltyPercent: ticket.eventId?.royaltyPercent ?? 10,
         organizerAddress: ticket.eventId?.organizerAddress,
       };
 
-      logger.info('TICKETS', `Resale buy: resalePrice=${resalePrice}, sellerPaidPrice=${ticket.price}, royaltyBps=${metadata.royaltyBps}, organizerAddr=${metadata.organizerAddress || 'MISSING'}, sellerRole=${seller.role}`);
+      logger.info('TICKETS', `Resale buy: resalePrice=${resalePrice}, royaltyPercent=${metadata.royaltyPercent}%, organizerAddr=${metadata.organizerAddress || 'MISSING'}, sellerRole=${seller.role}`);
 
       const result = await resellTicket(client, sellerWallet, buyerWallet, ticket.tokenId, resalePrice, metadata);
 
@@ -252,12 +252,11 @@ router.post('/resell', authMiddleware, async (req, res) => {
     const metadata = {
       maxResalePrice: ticket.maxResalePrice,
       eventDate: ticket.eventId?.date,
-      royaltyBps: Math.round((ticket.eventId?.royaltyPercent ?? 10) * 1000),
-      sellerPaidPrice: ticket.price,
+      royaltyPercent: ticket.eventId?.royaltyPercent ?? 10,
       organizerAddress: ticket.eventId?.organizerAddress,
     };
 
-    logger.info('TICKETS', `Resell: resalePrice=${resalePrice}, sellerPaidPrice=${ticket.price}, royaltyBps=${metadata.royaltyBps}, organizerAddr=${metadata.organizerAddress || 'MISSING'}`);
+    logger.info('TICKETS', `Resell: resalePrice=${resalePrice}, royaltyPercent=${metadata.royaltyPercent}%, organizerAddr=${metadata.organizerAddress || 'MISSING'}`);
 
     const result = await resellTicket(client, sellerWallet, buyerWallet, ticket.tokenId, resalePrice, metadata);
 
@@ -339,6 +338,7 @@ router.get('/marketplace', async (req, res) => {
       event_name: t.eventId?.name || '',
       event_date: t.eventId?.date || '',
       event_venue: t.eventId?.venue || '',
+      royalty_percent: t.eventId?.royaltyPercent ?? 10,
       owner_name: t.currentOwnerId?.displayName || '',
       owner_role: t.currentOwnerId?.role || '',
       listingPrice: t.listingPrice || t.price,

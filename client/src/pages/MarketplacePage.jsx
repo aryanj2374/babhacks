@@ -170,7 +170,13 @@ export default function MarketplacePage() {
                     )}
                   </div>
                   <div className="mt-opentix">
-                    Max resale: {t.max_resale_price} XRP
+                    {t.isResale ? (
+                      <>
+                        {t.royalty_percent}% royalty · Seller gets {(parseFloat(t.listingPrice) - parseFloat(t.listingPrice) * t.royalty_percent / 100).toFixed(2)} XRP
+                      </>
+                    ) : (
+                      <>Max resale: {t.max_resale_price} XRP</>
+                    )}
                   </div>
                 </div>
               ))}

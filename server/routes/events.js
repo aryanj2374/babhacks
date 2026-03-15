@@ -107,7 +107,6 @@ router.get('/:id', async (req, res) => {
       seat: t.seat,
       original_price: t.price,
       max_resale_price: t.maxResalePrice,
-      resale_count: t.resaleCount,
       redeemed: t.redeemed,
       owner_name: t.currentOwnerId?.displayName || '',
     }));
