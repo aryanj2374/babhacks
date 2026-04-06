@@ -1,4 +1,4 @@
-# 🎫 OpenTix — XRPL Ticketing Platform
+# 🎫 OpenTix — XRPL Ticketing Platform (1st Place Ripple Track $2000)
 Created by: Aryan Achuthan, Aryan Jain, Arvind Krishna Sivakumar, Kabilesh Yuvaraj
 
 A full-stack NFT ticketing platform built on the **XRP Ledger Testnet**. Tickets are minted as XLS-20 NFTs with built-in price caps and automatic royalties via XRPL's `TransferFee`.
