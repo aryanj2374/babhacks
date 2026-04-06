@@ -2,6 +2,8 @@
 Created by: Aryan Achuthan, Aryan Jain, Arvind Krishna Sivakumar, Kabilesh Yuvaraj
 
 A full-stack NFT ticketing platform built on the **XRP Ledger Testnet**. Tickets are minted as XLS-20 NFTs with built-in price caps and automatic royalties via XRPL's `TransferFee`.
+## Demo  
+https://www.youtube.com/watch?v=bAh8SJxKHC0 
 
 ## Features
 
